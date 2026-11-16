@@ -11,6 +11,7 @@ database.exec(`
   PRAGMA foreign_keys = ON;
   CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY,
+    tracking_token_hash TEXT,
     real_name TEXT NOT NULL,
     game_nickname TEXT NOT NULL,
     payment_method TEXT NOT NULL,
@@ -26,5 +27,10 @@ database.exec(`
     category TEXT NOT NULL
   );
 `);
+
+const orderColumns = database.prepare("PRAGMA table_info(orders)").all();
+if (!orderColumns.some((column) => column.name === "tracking_token_hash")) {
+  database.exec("ALTER TABLE orders ADD COLUMN tracking_token_hash TEXT");
+}
 
 export default database;

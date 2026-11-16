@@ -2,8 +2,10 @@ import database from "../db/database.js";
 
 export function insertOrder(order) {
   const insertOrderStatement = database.prepare(`
-    INSERT INTO orders (id, real_name, game_nickname, payment_method, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO orders (
+      id, tracking_token_hash, real_name, game_nickname, payment_method, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const insertItemStatement = database.prepare(
     "INSERT INTO order_items (order_id, name, category) VALUES (?, ?, ?)",
@@ -13,6 +15,7 @@ export function insertOrder(order) {
   try {
     insertOrderStatement.run(
       order.id,
+      order.trackingTokenHash,
       order.realName,
       order.gameNickname,
       order.paymentMethod,
@@ -54,6 +57,16 @@ export function selectOrders() {
     updatedAt: order.updated_at,
     items: itemsByOrder.get(order.id) ?? [],
   }));
+}
+
+export function selectOrderStatus(id, trackingTokenHash) {
+  return database
+    .prepare(`
+      SELECT id, status, created_at, updated_at
+      FROM orders
+      WHERE id = ? AND tracking_token_hash = ?
+    `)
+    .get(id, trackingTokenHash);
 }
 
 export function updateOrderStatus(id, status, updatedAt) {

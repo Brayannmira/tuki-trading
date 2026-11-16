@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   deleteOrder,
   insertOrder,
+  selectOrderStatus,
   selectOrders,
   updateOrderStatus as saveOrderStatus,
 } from "../repositories/orders.repository.js";
@@ -29,8 +30,10 @@ export function isValidOrder(order) {
 }
 
 export function createOrder(orderData) {
+  const trackingToken = randomBytes(32).toString("base64url");
   const order = {
     id: randomUUID(),
+    trackingTokenHash: createHash("sha256").update(trackingToken).digest("hex"),
     realName: orderData.realName.trim(),
     gameNickname: orderData.gameNickname.trim(),
     paymentMethod: orderData.paymentMethod,
@@ -43,11 +46,42 @@ export function createOrder(orderData) {
 
   insertOrder(order);
 
-  return { id: order.id, status: orderStatuses[0], createdAt: order.createdAt };
+  return {
+    id: order.id,
+    status: orderStatuses[0],
+    createdAt: order.createdAt,
+    trackingToken,
+  };
 }
 
 export function getOrders() {
   return selectOrders();
+}
+
+export function getOrderStatus(id, trackingToken) {
+  if (typeof trackingToken !== "string" || trackingToken.length !== 43) {
+    return {
+      error: "No se encontró el pedido o el código de seguimiento no es válido.",
+      statusCode: 404,
+    };
+  }
+
+  const trackingTokenHash = createHash("sha256").update(trackingToken).digest("hex");
+  const order = selectOrderStatus(id, trackingTokenHash);
+
+  if (!order) {
+    return {
+      error: "No se encontró el pedido o el código de seguimiento no es válido.",
+      statusCode: 404,
+    };
+  }
+
+  return {
+    id: order.id,
+    status: order.status,
+    createdAt: order.created_at,
+    updatedAt: order.updated_at,
+  };
 }
 
 export function changeOrderStatus(id, status) {

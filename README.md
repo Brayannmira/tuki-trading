@@ -33,15 +33,17 @@ Vite reenvía las solicitudes `/api` a la API local. La base SQLite se crea auto
 
 ## API
 
-- `POST /api/orders`: registra una solicitud y sus artículos.
+- `POST /api/orders`: registra una solicitud y sus artículos. Devuelve el número de pedido y un código de seguimiento que se muestra una sola vez.
+- `GET /api/orders/:id/status`: consulta el estado usando `Authorization: Bearer <codigo-de-seguimiento>`.
 - `POST /api/admin/login`: inicia la sesión administrativa.
 - `GET /api/admin/session`: comprueba si hay una sesión activa.
 - `POST /api/admin/logout`: cierra la sesión.
 - `GET /api/admin/orders`: lista los pedidos (requiere sesión).
 - `PATCH /api/admin/orders/:id/status`: actualiza el estado (requiere sesión).
+- `DELETE /api/admin/orders/:id`: elimina un pedido y sus artículos (requiere sesión).
 - `GET /api/health`: comprueba que la API está activa.
 
-El panel privado está en `/admin`. El formulario público no necesita login. Las sesiones del administrador usan una cookie `HttpOnly`, y el acceso a la lista y modificación de pedidos está protegido en el servidor.
+El panel privado está en `/admin`. El formulario público no necesita login; después de crear un pedido, el cliente debe guardar tanto su número como el código de seguimiento. El código se devuelve una sola vez y los pedidos anteriores a esta función no tienen código asignado. La consulta pública solo devuelve el estado y las fechas, no los datos personales del pedido. Las sesiones del administrador usan una cookie `HttpOnly`, y las operaciones administrativas están protegidas en el servidor.
 
 ## Estructura por capas
 

@@ -2,6 +2,7 @@ import {
   changeOrderStatus as saveOrderStatus,
   createOrder as saveOrder,
   getOrders,
+  getOrderStatus as lookupOrderStatus,
   isValidOrder,
   removeOrder,
 } from "../services/orders.service.js";
@@ -18,6 +19,18 @@ export function createOrder(request, response) {
 
 export function listOrders(_request, response) {
   response.json(getOrders());
+}
+
+export function getOrderStatus(request, response) {
+  const authorization = request.get("authorization") ?? "";
+  const match = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(authorization);
+  const result = lookupOrderStatus(request.params.id, match?.[1]);
+
+  if (result.error) {
+    return response.status(result.statusCode).json({ error: result.error });
+  }
+
+  return response.json(result);
 }
 
 export function updateOrderStatus(request, response) {

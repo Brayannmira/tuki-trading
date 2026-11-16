@@ -20,6 +20,9 @@ export default function Navbar() {
         <li className="nav-item">
           <NavLink to="/formulario">Formulario</NavLink>
         </li>
+        <li className="nav-item">
+          <NavLink to="/consultar-pedido">Consultar pedido</NavLink>
+        </li>
       </ul>
 
       <div className="user-status"></div>

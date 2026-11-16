@@ -7,6 +7,16 @@ export const orderRateLimit = rateLimit({
   legacyHeaders: false,
 });
 
+export const orderStatusRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  handler: (_request, response) => {
+    response.status(429).json({ error: "Demasiadas consultas. Inténtalo de nuevo más tarde." });
+  },
+});
+
 export const loginRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,

@@ -10,12 +10,14 @@ function Formulario() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionError, setSubmissionError] = useState("");
   const [createdOrderId, setCreatedOrderId] = useState("");
+  const [createdTrackingToken, setCreatedTrackingToken] = useState("");
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     setIsSubmitting(true);
     setSubmissionError("");
     setCreatedOrderId("");
+    setCreatedTrackingToken("");
 
     try {
       const response = await fetch("/api/orders", {
@@ -35,6 +37,7 @@ function Formulario() {
       }
 
       setCreatedOrderId(result.id);
+      setCreatedTrackingToken(result.trackingToken);
     } catch (error) {
       setSubmissionError(error.message || "No se pudo conectar con el servidor.");
     } finally {
@@ -122,9 +125,21 @@ function Formulario() {
         </button>
         {submissionError && <p className="trade-form-error" role="alert">{submissionError}</p>}
         {createdOrderId ? (
-          <p className="trade-form-success" role="status">
-            Solicitud recibida. Tu número de pedido es <strong>{createdOrderId}</strong>.
-          </p>
+          <div className="trade-form-success" role="status">
+            <p>
+              Solicitud recibida. Número de pedido: <strong>{createdOrderId}</strong>
+            </p>
+            <p>
+              Código de seguimiento: <strong className="tracking-token">{createdTrackingToken}</strong>
+            </p>
+            <p>Guarda ambos datos; el código no se volverá a mostrar.</p>
+            <Link
+              to="/consultar-pedido"
+              state={{ orderId: createdOrderId, trackingToken: createdTrackingToken }}
+            >
+              Consultar estado
+            </Link>
+          </div>
         ) : (
           <p className="trade-form-note">Te confirmaremos el estado de tu solicitud.</p>
         )}
