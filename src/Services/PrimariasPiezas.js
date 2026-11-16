@@ -1,0 +1,210 @@
+const primaryWeaponParts = {
+  "Acceltra Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+    ["Culatas", "Común"],
+  ],
+  "Afentis Prime": [
+    ["Plano", "Raro"],
+    ["Cabo", "Común"],
+    ["Cabeza", "Poco Común"],
+  ],
+  "Alternox Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+  ],
+  "Astilla Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+    ["Culatas", "Común"],
+  ],
+  "Baza Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Poco Común"],
+    ["Receptor", "Común"],
+    ["Culata", "Común"],
+  ],
+  "Boar Prime": [
+    ["Plano", "Poco Común"],
+    ["Cañón", "Raro"],
+    ["Receptor", "Común"],
+    ["Culata", "Común"],
+  ],
+  "Boltor Prime": [
+    ["Plano", "Poco Común"],
+    ["Cañón", "Raro"],
+    ["Receptor", "Común"],
+    ["Culata", "Común"],
+  ],
+  "Braton Prime": [
+    ["Plano", "Común"],
+    ["Cañón", "Poco Común"],
+    ["Receptor", "Común"],
+    ["Culata", "Común"],
+  ],
+  "Burston Prime": [
+    ["Plano", "Común"],
+    ["Cañón", "Poco Común"],
+    ["Receptor", "Común"],
+    ["Culata", "Común"],
+  ],
+  "Cedo Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+    ["Culatas", "Común"],
+  ],
+  "Cernos Prime": [
+    ["Plano", "Común"],
+    ["Pala superior", "Poco Común"],
+    ["Pala inferior", "Raro"],
+    ["Cuerda", "Común"],
+  ],
+  "Corinth Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Poco Común"],
+    ["Receptor", "Raro"],
+    ["Culata", "Común"],
+  ],
+  "Daikyu Prime": [
+    ["Plano", "Raro"],
+    ["Pala superior", "Común"],
+    ["Pala inferior", "Poco Común"],
+    ["Cuerda", "Común"],
+  ],
+  "Fulmin Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+    ["Culatas", "Común"],
+  ],
+  "Gotva Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+    ["Culata", "Común"],
+  ],
+  "Latron Prime": [
+    ["Plano", "Común"],
+    ["Cañón", "Poco Común"],
+    ["Receptor", "Común"],
+    ["Culata", "Raro"],
+  ],
+  "Nagantaka Prime": [
+    ["Plano", "Raro"],
+    ["Culata", "Común"],
+    ["Mecanismo", "Poco Común"],
+    ["Empuñadura", "Común"],
+  ],
+  "Panthera Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Poco Común"],
+    ["Receptor", "Común"],
+    ["Culata", "Común"],
+  ],
+  "Paris Prime": [
+    ["Plano", "Común"],
+    ["Pala inferior", "Común"],
+    ["Pala superior", "Común"],
+    ["Cuerda", "Común"],
+  ],
+  "Perigale Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+    ["Culata", "Común"],
+  ],
+  "Phantasma Prime": [
+    ["Plano", "Raro"],
+    ["Receptor", "Común"],
+    ["Cañón", "Poco Común"],
+    ["Culatas", "Común"],
+  ],
+  "Rubico Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Raro"],
+    ["Receptor", "Poco Común"],
+    ["Culatas", "Poco Común"],
+  ],
+  "Scourge Prime": [
+    ["Plano", "Raro"],
+    ["Cabeza", "Común"],
+    ["Mango", "Poco Común"],
+  ],
+  "Steflos Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+  ],
+  "Stradavar Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+    ["Culata", "Común"],
+  ],
+  "Strun Prime": [
+    ["Plano", "Poco Común"],
+    ["Cañón", "Raro"],
+    ["Receptor", "Común"],
+    ["Culata", "Común"],
+  ],
+  "Soma Prime": [
+    ["Plano", "Poco Común"],
+    ["Cañón", "Raro"],
+    ["Receptor", "Raro"],
+    ["Culata", "Poco Común"],
+  ],
+  "Sybaris Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Poco Común"],
+    ["Receptor", "Común"],
+    ["Culata", "Común"],
+  ],
+  "Tenora Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+    ["Culata", "Común"],
+  ],
+  "Tiberon Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Poco Común"],
+    ["Receptor", "Raro"],
+    ["Culata", "Común"],
+  ],
+  "Tigris Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Raro"],
+    ["Culata", "Poco Común"],
+    ["Receptor", "Poco Común"],
+  ],
+  "Trumna Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Común"],
+    ["Receptor", "Poco Común"],
+    ["Culatas", "Común"],
+  ],
+  "Vectis Prime": [
+    ["Plano", "Raro"],
+    ["Cañón", "Poco Común"],
+    ["Receptor", "Raro"],
+    ["Culata", "Común"],
+  ],
+  "Zhuge Prime": [
+    ["Plano", "Común"],
+    ["Culata", "Poco Común"],
+    ["Cuerda", "Raro"],
+    ["Pala", "Común"],
+  ],
+};
+
+export function getPrimaryWeaponParts(weaponName) {
+  return (primaryWeaponParts[weaponName] ?? []).map(([name, rarity]) => ({
+    name,
+    type: name === "Plano" ? "Plano Principal" : "Componente",
+    rarity,
+  }));
+}
