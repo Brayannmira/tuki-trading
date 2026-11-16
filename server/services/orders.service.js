@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  deleteOrder,
   insertOrder,
   selectOrders,
   updateOrderStatus as saveOrderStatus,
@@ -61,4 +62,14 @@ export function changeOrderStatus(id, status) {
   }
 
   return { id, status, updatedAt };
+}
+
+export function removeOrder(id) {
+  const changes = deleteOrder(id);
+
+  if (changes === 0) {
+    return { error: "No se encontró el pedido.", statusCode: 404 };
+  }
+
+  return { id };
 }

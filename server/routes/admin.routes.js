@@ -5,6 +5,7 @@ import {
   logout,
 } from "../controllers/admin.controller.js";
 import {
+  deleteOrder,
   listOrders,
   updateOrderStatus,
 } from "../controllers/orders.controller.js";
@@ -18,3 +19,4 @@ adminRouter.get("/session", getSession);
 adminRouter.post("/logout", logout);
 adminRouter.get("/orders", requireAdmin, listOrders);
 adminRouter.patch("/orders/:id/status", requireAdmin, updateOrderStatus);
+adminRouter.delete("/orders/:id", requireAdmin, deleteOrder);

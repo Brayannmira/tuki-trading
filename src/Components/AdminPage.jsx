@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 const orderStatuses = ["Pendiente", "En proceso", "Completado", "Cancelado"];
@@ -21,6 +21,9 @@ function AdminPage() {
   const [orders, setOrders] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [deletingOrderId, setDeletingOrderId] = useState("");
+  const [lampLit, setLampLit] = useState(false);
+  const audioContextRef = useRef(null);
 
   const loadOrders = useCallback(async () => {
     const response = await fetch("/api/admin/orders", { credentials: "same-origin" });
@@ -48,6 +51,44 @@ function AdminPage() {
       active = false;
     };
   }, [loadOrders]);
+
+  useEffect(() => () => {
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+    }
+  }, []);
+
+  const playLampSound = () => {
+    const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextConstructor) return;
+
+    const audioContext = audioContextRef.current ?? new AudioContextConstructor();
+    audioContextRef.current = audioContext;
+
+    if (audioContext.state === "suspended") {
+      void audioContext.resume();
+    }
+
+    const now = audioContext.currentTime;
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(120, now + 0.05);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.06, now + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+    oscillator.start(now + 0.05);
+    oscillator.stop(now + 0.38);
+  };
+
+  const toggleLamp = () => {
+    setLampLit((isLit) => !isLit);
+    playLampSound();
+  };
 
   const handleLogin = async (event) => {
     event.preventDefault();
@@ -103,8 +144,94 @@ function AdminPage() {
     }
   };
 
+  const deleteOrder = async (orderId) => {
+    if (!window.confirm("¿Seguro que quieres eliminar este pedido?")) return;
+
+    setError("");
+    setDeletingOrderId(orderId);
+
+    try {
+      const response = await fetch(
+        `/api/admin/orders/${encodeURIComponent(orderId)}`,
+        {
+          method: "DELETE",
+          credentials: "same-origin",
+        },
+      );
+
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error || "No se pudo eliminar el pedido.");
+      }
+
+      await loadOrders();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setDeletingOrderId("");
+    }
+  };
+
   if (checkingSession) {
     return <main className="admin-page"><p>Comprobando sesión...</p></main>;
+  }
+
+  if (!authenticated) {
+    return (
+      <main className={`admin-login-scene${lampLit ? " lit" : ""}`}>
+        <div className="room-ambient" aria-hidden="true" />
+        <div className="lamp-container">
+          <div className="lamp-head" aria-hidden="true" />
+          <div className="lamp-neck" aria-hidden="true" />
+          <div className="lamp-base" aria-hidden="true" />
+          <button
+            type="button"
+            className="pull-cord"
+            title={lampLit ? "Tira para apagar" : "Tira para encender"}
+            aria-label={lampLit ? "Apagar lámpara" : "Encender lámpara"}
+            aria-pressed={lampLit}
+            onClick={toggleLamp}
+          >
+            <span className="cord-line" aria-hidden="true" />
+            <span className="cord-handle" aria-hidden="true" />
+          </button>
+        </div>
+
+        <section className="admin-login-panel" aria-labelledby="admin-login-title">
+          <h2 id="admin-login-title">Admin Access</h2>
+          <p className="admin-login-subtitle">Introduce tus credenciales de administrador</p>
+          {error && <p className="admin-error" role="alert">{error}</p>}
+          <form className="admin-login-form" onSubmit={handleLogin}>
+            <div className="admin-login-input-group">
+              <label htmlFor="admin-username">Usuario</label>
+              <input
+                id="admin-username"
+                type="text"
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                required
+              />
+            </div>
+            <div className="admin-login-input-group">
+              <label htmlFor="admin-password">Contraseña</label>
+              <input
+                id="admin-password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
+            </div>
+            <button className="admin-login-submit" type="submit" disabled={loading}>
+              {loading ? "Ingresando..." : "Ingresar al panel"}
+            </button>
+          </form>
+          <Link className="admin-login-back" to="/catalogo">Volver al catálogo</Link>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -123,35 +250,7 @@ function AdminPage() {
 
       {error && <p className="admin-error" role="alert">{error}</p>}
 
-      {!authenticated ? (
-        <form className="admin-login category-section" onSubmit={handleLogin}>
-          <h2>Iniciar sesión</h2>
-          <label>
-            Usuario
-            <input
-              autoComplete="username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Contraseña
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-          </label>
-          <button className="trade-form-submit" type="submit" disabled={loading}>
-            {loading ? "Ingresando..." : "Entrar"}
-          </button>
-          <Link to="/catalogo">Volver al catálogo</Link>
-        </form>
-      ) : (
-        <section className="admin-orders">
+      <section className="admin-orders">
           <div className="admin-orders-heading">
             <h2>Solicitudes recibidas</h2>
             <button
@@ -203,14 +302,23 @@ function AdminPage() {
                       ))}
                     </select>
                   </label>
+                  <button
+                    type="button"
+                    className="admin-secondary-button"
+                    onClick={() => deleteOrder(order.id)}
+                    disabled={deletingOrderId === order.id}
+                  >
+                    {deletingOrderId === order.id ? "Eliminando..." : "Eliminar pedido"}
+                  </button>
                 </article>
               ))}
             </div>
           )}
-        </section>
-      )}
+      </section>
     </main>
   );
 }
+
+
 
 export default AdminPage;

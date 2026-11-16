@@ -61,3 +61,9 @@ export function updateOrderStatus(id, status, updatedAt) {
     .prepare("UPDATE orders SET status = ?, updated_at = ? WHERE id = ?")
     .run(status, updatedAt, id).changes;
 }
+
+export function deleteOrder(id) {
+  return database
+    .prepare("DELETE FROM orders WHERE id = ?")
+    .run(id).changes;
+}

@@ -3,6 +3,7 @@ import {
   createOrder as saveOrder,
   getOrders,
   isValidOrder,
+  removeOrder,
 } from "../services/orders.service.js";
 
 export function createOrder(request, response) {
@@ -27,4 +28,14 @@ export function updateOrderStatus(request, response) {
   }
 
   response.json(result);
+}
+
+export function deleteOrder(request, response) {
+  const result = removeOrder(request.params.id);
+
+  if (result.error) {
+    return response.status(result.statusCode).json({ error: result.error });
+  }
+
+  return response.status(204).end();
 }
