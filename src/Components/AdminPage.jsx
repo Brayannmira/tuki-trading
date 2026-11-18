@@ -12,8 +12,12 @@ import {
   CheckCircle2,
   Clock,
   Lock,
+  Package,
+  RefreshCw,
   ShieldCheck,
   ShoppingBag,
+  Trash2,
+  UserRound,
   XCircle,
 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -22,6 +26,12 @@ const AdminOrdersChart = lazy(() => import("./AdminOrdersChart.jsx"));
 
 const orderStatuses = ["Pendiente", "En proceso", "Completado", "Cancelado"];
 const ordersPerPage = 10;
+const orderStatusClasses = {
+  Pendiente: "pending",
+  "En proceso": "processing",
+  Completado: "completed",
+  Cancelado: "cancelled",
+};
 
 function getLocalDateKey(date) {
   const year = date.getFullYear();
@@ -615,7 +625,7 @@ function AdminPage() {
         </form>
       </section>
 
-      <section className="admin-orders">
+      <section className="admin-orders admin-orders-section">
         <div className="admin-orders-heading">
           <div>
             <h2>Solicitudes recibidas</h2>
@@ -642,12 +652,13 @@ function AdminPage() {
             </select>
             <button
               type="button"
-              className="admin-secondary-button"
+              className="admin-secondary-button admin-refresh-button"
               onClick={() => loadOrders(page, orderStatusFilter)
                 .catch((requestError) => setError(requestError.message))}
               disabled={loadingOrders}
             >
-              Actualizar
+              <RefreshCw size={15} aria-hidden="true" />
+              {loadingOrders ? "Actualizando..." : "Actualizar"}
             </button>
           </div>
         </div>
@@ -662,48 +673,75 @@ function AdminPage() {
           <div className="admin-order-list">
             {orders.map((order) => (
               <article className="admin-order-card" key={order.id}>
-                <div className="admin-order-topline">
-                  <div>
-                    <h3>{order.realName}</h3>
-                    <p>
-                      Nickname: <strong>{order.gameNickname}</strong>
-                      <span> · </span>
-                      {order.paymentMethod}
-                    </p>
+                <header className="admin-order-topline">
+                  <div className="admin-order-customer">
+                    <span className="admin-order-avatar" aria-hidden="true">
+                      <UserRound size={20} />
+                    </span>
+                    <div className="admin-order-customer-copy">
+                      <h3>{order.realName}</h3>
+                      <p>
+                        Nickname: <strong>{order.gameNickname}</strong>
+                        <span> · </span>
+                        {order.paymentMethod}
+                      </p>
+                    </div>
                   </div>
-                  <time dateTime={order.createdAt}>
+                  <time className="admin-order-date" dateTime={order.createdAt}>
                     {new Intl.DateTimeFormat("es-CO", {
                       dateStyle: "medium",
                       timeStyle: "short",
                     }).format(new Date(order.createdAt))}
                   </time>
-                </div>
-                <ul className="admin-order-items">
+                </header>
+                <ul className="admin-order-items-grid">
                   {order.items.map((item, index) => (
-                    <li key={`${item.name}-${item.category}-${index}`}>
-                      {item.name} <small>{item.category}</small>
+                    <li
+                      className="admin-order-item"
+                      key={`${item.name}-${item.category}-${index}`}
+                    >
+                      <span className="admin-order-item-icon" aria-hidden="true">
+                        <Package size={18} />
+                      </span>
+                      <span className="admin-order-item-copy">
+                        <strong>{item.name}</strong>
+                        <small>{item.category}</small>
+                      </span>
                     </li>
                   ))}
                 </ul>
-                <label className="admin-status-label">
-                  Estado del pedido
-                  <select
-                    value={order.status}
-                    onChange={(event) => updateOrderStatus(order.id, event.target.value)}
-                  >
-                    {orderStatuses.map((status) => (
-                      <option key={status} value={status}>{status}</option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="admin-secondary-button"
-                  onClick={() => deleteOrder(order.id)}
-                  disabled={deletingOrderId === order.id}
-                >
-                  {deletingOrderId === order.id ? "Eliminando..." : "Eliminar pedido"}
-                </button>
+                <footer className="admin-order-footer">
+                  <label className="admin-status-label">
+                    <span>Estado del pedido</span>
+                    <span className="admin-status-control">
+                      <span
+                        className={`admin-status-dot ${orderStatusClasses[order.status]}`}
+                        aria-hidden="true"
+                      />
+                      <select
+                        value={order.status}
+                        onChange={(event) => updateOrderStatus(order.id, event.target.value)}
+                        aria-label={`Estado del pedido de ${order.realName}`}
+                      >
+                        {orderStatuses.map((status) => (
+                          <option key={status} value={status}>{status}</option>
+                        ))}
+                      </select>
+                    </span>
+                  </label>
+                  <div className="admin-order-actions">
+                    <span className="admin-order-actions-label">Acciones</span>
+                    <button
+                      type="button"
+                      className="admin-secondary-button admin-delete-button"
+                      onClick={() => deleteOrder(order.id)}
+                      disabled={deletingOrderId === order.id}
+                    >
+                      <Trash2 size={15} aria-hidden="true" />
+                      {deletingOrderId === order.id ? "Eliminando..." : "Eliminar pedido"}
+                    </button>
+                  </div>
+                </footer>
               </article>
             ))}
           </div>
