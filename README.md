@@ -56,6 +56,8 @@ La selección de paquetes de platino se muestra en el catálogo, pero no se env�
 
 La base de datos y sus tablas se crean al iniciar la API. Para ejecutar la API sin el modo de recarga automática de desarrollo, usa `npm.cmd run start:server`.
 
+Si el panel informa que la API respondió sin contenido o presenta un error de conexión, confirma que `npm.cmd run server` siga ejecutándose en otra terminal y que Vite pueda acceder al puerto de API configurado (localmente, `3001`).
+
 ## Páginas del frontend
 
 | Ruta | Página |

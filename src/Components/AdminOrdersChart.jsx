@@ -15,8 +15,8 @@ function AdminOrdersChart({ data }) {
         <AreaChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
           <defs>
             <linearGradient id="adminOrdersGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#f39c12" stopOpacity={0.4} />
-              <stop offset="95%" stopColor="#f39c12" stopOpacity={0} />
+              <stop offset="5%" stopColor="#a855f7" stopOpacity={0.45} />
+              <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
@@ -34,7 +34,7 @@ function AdminOrdersChart({ data }) {
           <Area
             type="monotone"
             dataKey="pedidos"
-            stroke="#f39c12"
+            stroke="#d8b4fe"
             strokeWidth={3}
             fill="url(#adminOrdersGradient)"
             activeDot={{ r: 5 }}

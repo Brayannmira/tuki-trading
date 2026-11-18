@@ -57,6 +57,7 @@ function Formulario() {
             <input
               type="text"
               autoComplete="name"
+              maxLength={100}
               value={realName}
               onChange={(event) => setRealName(event.target.value)}
               required
@@ -67,6 +68,7 @@ function Formulario() {
             <input
               type="text"
               autoComplete="nickname"
+              maxLength={100}
               value={gameNickname}
               onChange={(event) => setGameNickname(event.target.value)}
               required
@@ -119,7 +121,7 @@ function Formulario() {
         <button
           className="trade-form-submit"
           type="submit"
-          disabled={selectedItems.length === 0}
+          disabled={selectedItems.length === 0 || isSubmitting}
         >
           {isSubmitting ? "Enviando solicitud..." : "Enviar solicitud"}
         </button>

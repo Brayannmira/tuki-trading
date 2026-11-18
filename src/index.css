@@ -199,6 +199,23 @@ code {
   line-height: 1.6;
   font-size: 1rem;
 }
+
+@media (max-width: 640px) {
+  .content-container {
+    min-height: auto;
+    padding: 16px 12px 40px;
+  }
+
+  .category-section {
+    box-sizing: border-box;
+    padding: 20px 16px;
+  }
+
+  .category-section:hover {
+    transform: none;
+  }
+}
+
 @keyframes navSlideDown {
   from {
     opacity: 0;

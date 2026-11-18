@@ -3,14 +3,17 @@ function SearchBar({ searchTerm, setSearchTerm }) {
     <div style={{ marginBottom: "25px", textAlign: "center" }}>
       <input
         type="text"
+        aria-label="Buscar artículos del catálogo"
         placeholder="Buscar pieza, plano o arma..."
         value={searchTerm}
         onChange={(e) => setSearchTerm(e.target.value)}
         style={{
           width: "100%",
           maxWidth: "500px",
+          boxSizing: "border-box",
+          minHeight: "44px",
           padding: "12px 20px",
-          fontSize: "1rem",
+          fontSize: "16px",
           backgroundColor: "#161b22",
           color: "#c9d1d9",
           border: "1px solid #30363d",

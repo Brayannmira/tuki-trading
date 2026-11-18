@@ -1,6 +1,21 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { CheckCircle2, Clock, ShoppingBag, XCircle } from "lucide-react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import {
+  CheckCircle2,
+  Clock,
+  Lock,
+  ShieldCheck,
+  ShoppingBag,
+  XCircle,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 
 const AdminOrdersChart = lazy(() => import("./AdminOrdersChart.jsx"));
@@ -44,9 +59,16 @@ function getDashboardMetrics(summary) {
   };
 }
 
-function StatsCard({ title, value, detail, icon: Icon, variant }) {
+function StatsCard({ title, value, detail, icon: Icon, variant, reduceMotion }) {
   return (
-    <motion.article className="admin-stat-card" whileHover={{ y: -5 }}>
+    <motion.article
+      className="admin-stat-card"
+      variants={{
+        hidden: reduceMotion ? { opacity: 1 } : { opacity: 0, y: 14 },
+        visible: { opacity: 1, y: 0, transition: { duration: 0.35 } },
+      }}
+      whileHover={reduceMotion ? undefined : { y: -5 }}
+    >
       <div className="admin-stat-card-top">
         <div>
           <p className="admin-stat-title">{title}</p>
@@ -62,16 +84,57 @@ function StatsCard({ title, value, detail, icon: Icon, variant }) {
 }
 
 async function readJsonResponse(response) {
-  const result = await response.json();
+  const responseBody = await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
 
   if (!response.ok) {
-    throw new Error(result.error || "No se pudo completar la solicitud.");
+    if (!responseBody) {
+      throw new Error(
+        `La API respondió sin contenido (HTTP ${response.status}). En desarrollo, inicia npm.cmd run server en otra terminal y verifica que Vite pueda acceder a /api.`,
+      );
+    }
+
+    if (!contentType.includes("application/json")) {
+      throw new Error(
+        `La API devolvió una respuesta inesperada (HTTP ${response.status}). En desarrollo, inicia npm.cmd run server en otra terminal y verifica que Vite pueda acceder a /api.`,
+      );
+    }
+  }
+
+  if (!responseBody) {
+    throw new Error(
+      `La API respondió sin contenido (HTTP ${response.status}). En desarrollo, inicia npm.cmd run server en otra terminal y verifica que Vite pueda acceder a /api.`,
+    );
+  }
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `La API devolvió un formato inesperado (HTTP ${response.status}). Comprueba que la solicitud llegue al servidor Express.`,
+    );
+  }
+
+  let result;
+  try {
+    result = JSON.parse(responseBody);
+  } catch {
+    throw new Error(
+      `La API devolvió JSON incompleto o inválido (HTTP ${response.status}). Verifica que el servidor esté funcionando correctamente.`,
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      typeof result?.error === "string"
+        ? result.error
+        : `No se pudo completar la solicitud (HTTP ${response.status}).`,
+    );
   }
 
   return result;
 }
 
 function AdminPage() {
+  const prefersReducedMotion = useReducedMotion();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
@@ -99,9 +162,9 @@ function AdminPage() {
   const [loading, setLoading] = useState(false);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [deletingOrderId, setDeletingOrderId] = useState("");
-  const [lampLit, setLampLit] = useState(false);
+  const [vaultOpening, setVaultOpening] = useState(false);
   const [orderStatusFilter, setOrderStatusFilter] = useState("Todos");
-  const audioContextRef = useRef(null);
+  const vaultCompletionStarted = useRef(false);
   const orderRequestId = useRef(0);
   const dashboardMetrics = useMemo(
     () => getDashboardMetrics(dashboardSummary),
@@ -155,42 +218,14 @@ function AdminPage() {
     };
   }, [loadOrders]);
 
-  useEffect(() => () => {
-    if (audioContextRef.current) {
-      void audioContextRef.current.close();
-    }
-  }, []);
+  const completeVaultOpening = () => {
+    if (vaultCompletionStarted.current) return;
 
-  const playLampSound = () => {
-    const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextConstructor) return;
-
-    const audioContext = audioContextRef.current ?? new AudioContextConstructor();
-    audioContextRef.current = audioContext;
-
-    if (audioContext.state === "suspended") {
-      void audioContext.resume();
-    }
-
-    const now = audioContext.currentTime;
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(120, now + 0.05);
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.linearRampToValueAtTime(0.06, now + 0.08);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-
-    oscillator.connect(gain);
-    gain.connect(audioContext.destination);
-    oscillator.start(now + 0.05);
-    oscillator.stop(now + 0.38);
-  };
-
-  const toggleLamp = () => {
-    setLampLit((isLit) => !isLit);
-    playLampSound();
+    vaultCompletionStarted.current = true;
+    setAuthenticated(true);
+    setVaultOpening(false);
+    loadOrders(page, orderStatusFilter)
+      .catch((requestError) => setError(requestError.message));
   };
 
   const handleLogin = async (event) => {
@@ -206,10 +241,15 @@ function AdminPage() {
         body: JSON.stringify({ username, password }),
       });
       await readJsonResponse(response);
-      setAuthenticated(true);
       setPassword("");
       setNotice("");
-      await loadOrders(page, orderStatusFilter);
+      vaultCompletionStarted.current = false;
+      if (prefersReducedMotion) {
+        setAuthenticated(true);
+        await loadOrders(page, orderStatusFilter);
+      } else {
+        setVaultOpening(true);
+      }
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -333,75 +373,133 @@ function AdminPage() {
 
   if (!authenticated) {
     return (
-      <main className={`admin-login-scene${lampLit ? " lit" : ""}`}>
-        <div className="room-ambient" aria-hidden="true" />
-        <div className="lamp-container">
-          <div className="lamp-head" aria-hidden="true" />
-          <div className="lamp-neck" aria-hidden="true" />
-          <div className="lamp-base" aria-hidden="true" />
-          <button
-            type="button"
-            className="pull-cord"
-            title={lampLit ? "Tira para apagar" : "Tira para encender"}
-            aria-label={lampLit ? "Apagar lámpara" : "Encender lámpara"}
-            aria-pressed={lampLit}
-            onClick={toggleLamp}
-          >
-            <span className="cord-line" aria-hidden="true" />
-            <span className="cord-handle" aria-hidden="true" />
-          </button>
+      <main className="admin-login-scene vault-scene">
+        <div className="vault-ambient" aria-hidden="true" />
+        <div className="vault-grid" aria-hidden="true" />
+        <div className="vault-content">
+          <AnimatePresence mode="wait" initial={false}>
+            {!vaultOpening ? (
+              <motion.section
+                key="vault-login"
+                className="admin-login-panel vault-login-panel"
+                aria-labelledby="admin-login-title"
+                initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.92 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={prefersReducedMotion ? undefined : {
+                  opacity: 0,
+                  scale: 1.08,
+                  filter: "blur(10px)",
+                }}
+                transition={{ duration: 0.45 }}
+              >
+                <div className="vault-decorative-ring" aria-hidden="true" />
+                <div className="vault-login-heading">
+                  <span className="vault-lock-icon">
+                    <Lock size={23} aria-hidden="true" />
+                  </span>
+                  <div>
+                    <h1 id="admin-login-title">Acceso a bodega</h1>
+                    <p className="admin-login-subtitle">Protocolo seguro · Tuki Trading</p>
+                  </div>
+                </div>
+                {notice && <p className="admin-notice" role="status">{notice}</p>}
+                {error && <p className="admin-error" role="alert">{error}</p>}
+                <form className="admin-login-form" onSubmit={handleLogin}>
+                  <div className="admin-login-input-group">
+                    <label htmlFor="admin-username">Identificador</label>
+                    <input
+                      id="admin-username"
+                      type="text"
+                      autoComplete="username"
+                      placeholder="Usuario administrador"
+                      value={username}
+                      onChange={(event) => setUsername(event.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="admin-login-input-group">
+                    <label htmlFor="admin-password">Llave de acceso</label>
+                    <input
+                      id="admin-password"
+                      type="password"
+                      autoComplete="current-password"
+                      placeholder="Contraseña"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      required
+                    />
+                  </div>
+                  <motion.button
+                    className="admin-login-submit vault-login-submit"
+                    type="submit"
+                    disabled={loading}
+                    whileHover={prefersReducedMotion ? undefined : {
+                      scale: 1.02,
+                      boxShadow: "0 0 22px rgba(212, 175, 55, 0.28)",
+                    }}
+                    whileTap={prefersReducedMotion ? undefined : { scale: 0.98 }}
+                  >
+                    <ShieldCheck size={18} aria-hidden="true" />
+                    {loading ? "Verificando..." : "Desbloquear bodega"}
+                  </motion.button>
+                </form>
+                <Link className="admin-login-back" to="/catalogo">Volver al catálogo</Link>
+              </motion.section>
+            ) : (
+              <motion.section
+                key="vault-opening"
+                className="vault-opening"
+                aria-live="polite"
+                aria-label="Abriendo acceso administrativo"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <motion.div
+                  className="vault-iris"
+                  initial={{ scale: 0.65, opacity: 1 }}
+                  animate={{ scale: 12, opacity: 0 }}
+                  transition={{ duration: 1.35, ease: [0.22, 1, 0.36, 1] }}
+                  onAnimationComplete={completeVaultOpening}
+                  aria-hidden="true"
+                />
+                <motion.p
+                  className="vault-granted"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4, delay: 0.45 }}
+                >
+                  Acceso concedido
+                </motion.p>
+              </motion.section>
+            )}
+          </AnimatePresence>
         </div>
-
-        <section className="admin-login-panel" aria-labelledby="admin-login-title">
-          <h2 id="admin-login-title">Admin Access</h2>
-          <p className="admin-login-subtitle">Introduce tus credenciales de administrador</p>
-          {notice && <p className="admin-notice" role="status">{notice}</p>}
-          {error && <p className="admin-error" role="alert">{error}</p>}
-          <form className="admin-login-form" onSubmit={handleLogin}>
-            <div className="admin-login-input-group">
-              <label htmlFor="admin-username">Usuario</label>
-              <input
-                id="admin-username"
-                type="text"
-                autoComplete="username"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                required
-              />
-            </div>
-            <div className="admin-login-input-group">
-              <label htmlFor="admin-password">Contraseña</label>
-              <input
-                id="admin-password"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-              />
-            </div>
-            <button className="admin-login-submit" type="submit" disabled={loading}>
-              {loading ? "Ingresando..." : "Ingresar al panel"}
-            </button>
-          </form>
-          <Link className="admin-login-back" to="/catalogo">Volver al catálogo</Link>
-        </section>
       </main>
     );
   }
 
   return (
-    <main className="admin-page">
+    <motion.main
+      className="admin-page"
+      initial={prefersReducedMotion ? false : { opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.55, ease: "easeOut" }}
+    >
       <header className="admin-header">
         <div>
-          <p className="admin-eyebrow">Panel privado</p>
-          <h1>Gestión de pedidos</h1>
+          <p className="admin-eyebrow">Sistema Tuki Trading · Módulo administrativo</p>
+          <h1>Control de pedidos</h1>
         </div>
-        {authenticated && (
+        <div className="admin-header-actions">
+          <span className="admin-access-badge">
+            <ShieldCheck size={15} aria-hidden="true" />
+            Acceso administrador
+          </span>
           <button type="button" className="admin-secondary-button" onClick={handleLogout}>
             Cerrar sesión
           </button>
-        )}
+        </div>
       </header>
 
       {error && <p className="admin-error" role="alert">{error}</p>}
@@ -415,13 +513,22 @@ function AdminPage() {
           </div>
         </div>
 
-        <div className="admin-stats-grid">
+        <motion.div
+          className="admin-stats-grid"
+          initial="hidden"
+          animate="visible"
+          variants={{
+            hidden: {},
+            visible: { transition: { staggerChildren: prefersReducedMotion ? 0 : 0.08 } },
+          }}
+        >
           <StatsCard
             title="Pedidos este mes"
             value={dashboardMetrics.thisMonth}
             detail="Solicitudes registradas este mes"
             icon={ShoppingBag}
             variant="orders"
+            reduceMotion={prefersReducedMotion}
           />
           <StatsCard
             title="Pedidos activos"
@@ -429,6 +536,7 @@ function AdminPage() {
             detail="Pendientes o en proceso"
             icon={Clock}
             variant="active"
+            reduceMotion={prefersReducedMotion}
           />
           <StatsCard
             title="Completados"
@@ -436,6 +544,7 @@ function AdminPage() {
             detail="Pedidos completados"
             icon={CheckCircle2}
             variant="completed"
+            reduceMotion={prefersReducedMotion}
           />
           <StatsCard
             title="Cancelados"
@@ -443,8 +552,9 @@ function AdminPage() {
             detail="Pedidos cancelados"
             icon={XCircle}
             variant="cancelled"
+            reduceMotion={prefersReducedMotion}
           />
-        </div>
+        </motion.div>
 
         <section className="admin-chart-card" aria-labelledby="admin-chart-title">
           <div className="admin-chart-heading">
@@ -621,7 +731,7 @@ function AdminPage() {
           </nav>
         )}
       </section>
-    </main>
+    </motion.main>
   );
 }
 
