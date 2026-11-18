@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 const AdminOrdersChart = lazy(() => import("./AdminOrdersChart.jsx"));
 
 const orderStatuses = ["Pendiente", "En proceso", "Completado", "Cancelado"];
+const ordersPerPage = 10;
 
 function getLocalDateKey(date) {
   const year = date.getFullYear();
@@ -14,7 +15,7 @@ function getLocalDateKey(date) {
   return `${year}-${month}-${day}`;
 }
 
-function getDashboardMetrics(orders) {
+function getDashboardMetrics(summary) {
   const today = new Date();
   const chartDays = Array.from({ length: 7 }, (_, index) => {
     const date = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -27,30 +28,15 @@ function getDashboardMetrics(orders) {
       pedidos: 0,
     };
   });
-  const ordersByDay = new Map(chartDays.map(({ dateKey }) => [dateKey, 0]));
-
-  for (const order of orders) {
-    const createdAt = new Date(order.createdAt);
-    if (Number.isNaN(createdAt.getTime())) continue;
-
-    const dateKey = getLocalDateKey(createdAt);
-    if (ordersByDay.has(dateKey)) {
-      ordersByDay.set(dateKey, ordersByDay.get(dateKey) + 1);
-    }
-  }
+  const ordersByDay = new Map(
+    (summary.chartData ?? []).map(({ dateKey, pedidos }) => [dateKey, pedidos]),
+  );
 
   return {
-    thisMonth: orders.filter((order) => {
-      const createdAt = new Date(order.createdAt);
-      return (
-        !Number.isNaN(createdAt.getTime()) &&
-        createdAt.getFullYear() === today.getFullYear() &&
-        createdAt.getMonth() === today.getMonth()
-      );
-    }).length,
-    active: orders.filter((order) => ["Pendiente", "En proceso"].includes(order.status)).length,
-    completed: orders.filter((order) => order.status === "Completado").length,
-    cancelled: orders.filter((order) => order.status === "Cancelado").length,
+    thisMonth: summary.thisMonth,
+    active: summary.active,
+    completed: summary.completed,
+    cancelled: summary.cancelled,
     chartData: chartDays.map(({ dateKey, ...day }) => ({
       ...day,
       pedidos: ordersByDay.get(dateKey),
@@ -88,26 +74,62 @@ async function readJsonResponse(response) {
 function AdminPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [orders, setOrders] = useState([]);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: ordersPerPage,
+    total: 0,
+    totalPages: 0,
+  });
+  const [dashboardSummary, setDashboardSummary] = useState({
+    thisMonth: 0,
+    active: 0,
+    completed: 0,
+    cancelled: 0,
+    chartData: [],
+  });
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingOrders, setLoadingOrders] = useState(false);
   const [deletingOrderId, setDeletingOrderId] = useState("");
   const [lampLit, setLampLit] = useState(false);
   const [orderStatusFilter, setOrderStatusFilter] = useState("Todos");
   const audioContextRef = useRef(null);
-  const dashboardMetrics = useMemo(() => getDashboardMetrics(orders), [orders]);
-  const visibleOrders = useMemo(
-    () => orderStatusFilter === "Todos"
-      ? orders
-      : orders.filter((order) => order.status === orderStatusFilter),
-    [orders, orderStatusFilter],
+  const orderRequestId = useRef(0);
+  const dashboardMetrics = useMemo(
+    () => getDashboardMetrics(dashboardSummary),
+    [dashboardSummary],
   );
 
-  const loadOrders = useCallback(async () => {
-    const response = await fetch("/api/admin/orders", { credentials: "same-origin" });
-    setOrders(await readJsonResponse(response));
+  const loadOrders = useCallback(async (requestedPage, status) => {
+    const requestId = ++orderRequestId.current;
+    const query = new URLSearchParams({
+      page: String(requestedPage),
+      limit: String(ordersPerPage),
+      status,
+    });
+    setLoadingOrders(true);
+    try {
+      const response = await fetch(`/api/admin/orders?${query}`, {
+        credentials: "same-origin",
+      });
+      const result = await readJsonResponse(response);
+      if (requestId !== orderRequestId.current) return;
+
+      setOrders(result.data);
+      setPagination(result.pagination);
+      setDashboardSummary(result.summary);
+      setPage(result.pagination.page);
+    } finally {
+      if (requestId === orderRequestId.current) setLoadingOrders(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -118,7 +140,7 @@ function AdminPage() {
       .then(async (session) => {
         if (!active || !session.authenticated) return;
         setAuthenticated(true);
-        await loadOrders();
+        await loadOrders(1, "Todos");
       })
       .catch((requestError) => {
         if (active) setError(requestError.message);
@@ -129,6 +151,7 @@ function AdminPage() {
 
     return () => {
       active = false;
+      orderRequestId.current += 1;
     };
   }, [loadOrders]);
 
@@ -185,7 +208,40 @@ function AdminPage() {
       await readJsonResponse(response);
       setAuthenticated(true);
       setPassword("");
-      await loadOrders();
+      setNotice("");
+      await loadOrders(page, orderStatusFilter);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasswordChange = async (event) => {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+
+    if (newPassword !== confirmPassword) {
+      setError("La nueva contraseña y su confirmación no coinciden.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("/api/admin/password", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      await readJsonResponse(response);
+      setAuthenticated(false);
+      setOrders([]);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setNotice("Contraseña cambiada. Inicia sesión con la nueva contraseña.");
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -204,7 +260,7 @@ function AdminPage() {
         body: JSON.stringify({ status }),
       });
       await readJsonResponse(response);
-      await loadOrders();
+      await loadOrders(page, orderStatusFilter);
     } catch (requestError) {
       setError(requestError.message);
     }
@@ -217,8 +273,10 @@ function AdminPage() {
         credentials: "same-origin",
       });
       if (!response.ok) throw new Error("No se pudo cerrar la sesión.");
+      orderRequestId.current += 1;
       setAuthenticated(false);
       setOrders([]);
+      setLoadingOrders(false);
     } catch (requestError) {
       setError(requestError.message);
     }
@@ -244,12 +302,29 @@ function AdminPage() {
         throw new Error(result.error || "No se pudo eliminar el pedido.");
       }
 
-      await loadOrders();
+      await loadOrders(page, orderStatusFilter);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
       setDeletingOrderId("");
     }
+  };
+
+  const changePage = async (nextPage) => {
+    setError("");
+    try {
+      await loadOrders(nextPage, orderStatusFilter);
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
+  const changeStatusFilter = (event) => {
+    const status = event.target.value;
+    setOrderStatusFilter(status);
+    setPage(1);
+    setError("");
+    loadOrders(1, status).catch((requestError) => setError(requestError.message));
   };
 
   if (checkingSession) {
@@ -280,6 +355,7 @@ function AdminPage() {
         <section className="admin-login-panel" aria-labelledby="admin-login-title">
           <h2 id="admin-login-title">Admin Access</h2>
           <p className="admin-login-subtitle">Introduce tus credenciales de administrador</p>
+          {notice && <p className="admin-notice" role="status">{notice}</p>}
           {error && <p className="admin-error" role="alert">{error}</p>}
           <form className="admin-login-form" onSubmit={handleLogin}>
             <div className="admin-login-input-group">
@@ -329,6 +405,7 @@ function AdminPage() {
       </header>
 
       {error && <p className="admin-error" role="alert">{error}</p>}
+      {notice && <p className="admin-notice" role="status">{notice}</p>}
 
       <section className="admin-dashboard" aria-labelledby="admin-dashboard-title">
         <div className="admin-dashboard-heading">
@@ -384,18 +461,69 @@ function AdminPage() {
         </section>
       </section>
 
+      <section className="admin-password-card" aria-labelledby="admin-password-title">
+        <h2 id="admin-password-title">Cambiar contraseña</h2>
+        <p>La contraseña debe tener entre 12 y 128 caracteres. Al cambiarla, se cerrarán las sesiones activas.</p>
+        <form className="admin-password-form" onSubmit={handlePasswordChange}>
+          <label>
+            Contraseña actual
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            Nueva contraseña
+            <input
+              type="password"
+              autoComplete="new-password"
+              minLength={12}
+              maxLength={128}
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            Confirmar nueva contraseña
+            <input
+              type="password"
+              autoComplete="new-password"
+              minLength={12}
+              maxLength={128}
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              required
+            />
+          </label>
+          <button type="submit" className="admin-secondary-button" disabled={loading}>
+            {loading ? "Guardando..." : "Cambiar contraseña"}
+          </button>
+        </form>
+      </section>
+
       <section className="admin-orders">
         <div className="admin-orders-heading">
           <div>
             <h2>Solicitudes recibidas</h2>
-            <p>{visibleOrders.length} de {orders.length} pedidos</p>
+            <p>
+              {pagination.total === 0
+                ? "0 pedidos"
+                : `${(pagination.page - 1) * pagination.limit + 1}–${Math.min(
+                  pagination.page * pagination.limit,
+                  pagination.total,
+                )} de ${pagination.total} pedidos`}
+            </p>
           </div>
           <div className="admin-order-tools">
             <label htmlFor="admin-order-status-filter">Filtrar por estado</label>
             <select
               id="admin-order-status-filter"
               value={orderStatusFilter}
-              onChange={(event) => setOrderStatusFilter(event.target.value)}
+              onChange={changeStatusFilter}
             >
               <option value="Todos">Todos</option>
               {orderStatuses.map((status) => (
@@ -405,22 +533,24 @@ function AdminPage() {
             <button
               type="button"
               className="admin-secondary-button"
-              onClick={() => loadOrders().catch((requestError) => setError(requestError.message))}
+              onClick={() => loadOrders(page, orderStatusFilter)
+                .catch((requestError) => setError(requestError.message))}
+              disabled={loadingOrders}
             >
               Actualizar
             </button>
           </div>
         </div>
 
-        {visibleOrders.length === 0 ? (
+        {orders.length === 0 ? (
           <p className="admin-empty">
-            {orders.length === 0
+            {pagination.total === 0 && orderStatusFilter === "Todos"
               ? "Todavía no hay pedidos."
               : "No hay pedidos con el estado seleccionado."}
           </p>
         ) : (
           <div className="admin-order-list">
-            {visibleOrders.map((order) => (
+            {orders.map((order) => (
               <article className="admin-order-card" key={order.id}>
                 <div className="admin-order-topline">
                   <div>
@@ -467,6 +597,28 @@ function AdminPage() {
               </article>
             ))}
           </div>
+        )}
+
+        {pagination.totalPages > 1 && (
+          <nav className="admin-pagination" aria-label="Paginación de pedidos">
+            <button
+              type="button"
+              className="admin-secondary-button"
+              onClick={() => changePage(pagination.page - 1)}
+              disabled={loadingOrders || pagination.page <= 1}
+            >
+              Anterior
+            </button>
+            <span>Página {pagination.page} de {pagination.totalPages}</span>
+            <button
+              type="button"
+              className="admin-secondary-button"
+              onClick={() => changePage(pagination.page + 1)}
+              disabled={loadingOrders || pagination.page >= pagination.totalPages}
+            >
+              Siguiente
+            </button>
+          </nav>
         )}
       </section>
     </main>

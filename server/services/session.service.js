@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { config } from "../config/env.js";
+import { getAdminSessionVersion } from "./admin.service.js";
 
 const sessionCookieName = "tuki_admin_session";
 const sessionDurationMs = 8 * 60 * 60 * 1000;
@@ -15,7 +16,10 @@ function getCookie(request, name) {
 
 function createSessionToken() {
   const payload = Buffer.from(
-    JSON.stringify({ expiresAt: Date.now() + sessionDurationMs }),
+    JSON.stringify({
+      expiresAt: Date.now() + sessionDurationMs,
+      version: getAdminSessionVersion(),
+    }),
   ).toString("base64url");
   const signature = createHmac("sha256", config.sessionSecret).update(payload).digest("base64url");
 
@@ -40,7 +44,11 @@ export function hasValidSession(request) {
 
   try {
     const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return Number.isFinite(session.expiresAt) && session.expiresAt > Date.now();
+    return (
+      Number.isFinite(session.expiresAt) &&
+      session.expiresAt > Date.now() &&
+      session.version === getAdminSessionVersion()
+    );
   } catch {
     return false;
   }

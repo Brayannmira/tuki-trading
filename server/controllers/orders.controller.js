@@ -4,8 +4,20 @@ import {
   getOrders,
   getOrderStatus as lookupOrderStatus,
   isValidOrder,
+  orderStatuses,
   removeOrder,
 } from "../services/orders.service.js";
+
+const defaultPage = 1;
+const defaultLimit = 10;
+const maxLimit = 50;
+
+function parsePositiveInteger(value) {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return null;
+
+  const number = Number(value);
+  return Number.isSafeInteger(number) ? number : null;
+}
 
 export function createOrder(request, response) {
   const orderData = request.body ?? {};
@@ -17,8 +29,28 @@ export function createOrder(request, response) {
   response.status(201).json(saveOrder(orderData));
 }
 
-export function listOrders(_request, response) {
-  response.json(getOrders());
+export function listOrders(request, response) {
+  const page = request.query.page === undefined
+    ? defaultPage
+    : parsePositiveInteger(request.query.page);
+  const limit = request.query.limit === undefined
+    ? defaultLimit
+    : parsePositiveInteger(request.query.limit);
+  const status = request.query.status === undefined ? "Todos" : request.query.status;
+
+  if (
+    page === null ||
+    limit === null ||
+    limit > maxLimit ||
+    typeof status !== "string" ||
+    !["Todos", ...orderStatuses].includes(status)
+  ) {
+    return response.status(400).json({
+      error: "Usa page y limit como enteros positivos (limit máximo 50) y un estado válido.",
+    });
+  }
+
+  return response.json(getOrders({ page, limit, status }));
 }
 
 export function getOrderStatus(request, response) {

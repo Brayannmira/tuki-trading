@@ -1,9 +1,12 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { config } from "../config/env.js";
 import {
   deleteOrder,
+  countOrders,
   insertOrder,
+  selectOrderSummary,
   selectOrderStatus,
-  selectOrders,
+  selectOrdersPage,
   updateOrderStatus as saveOrderStatus,
 } from "../repositories/orders.repository.js";
 
@@ -54,8 +57,26 @@ export function createOrder(orderData) {
   };
 }
 
-export function getOrders() {
-  return selectOrders();
+export function getOrders({ page, limit, status }) {
+  const total = countOrders(status);
+  const totalPages = Math.ceil(total / limit);
+  const currentPage = Math.min(page, Math.max(totalPages, 1));
+  const data = selectOrdersPage({
+    limit,
+    offset: (currentPage - 1) * limit,
+    status,
+  });
+
+  return {
+    data,
+    pagination: {
+      page: currentPage,
+      limit,
+      total,
+      totalPages,
+    },
+    summary: selectOrderSummary(),
+  };
 }
 
 export function getOrderStatus(id, trackingToken) {
@@ -90,7 +111,7 @@ export function changeOrderStatus(id, status) {
   }
 
   const updatedAt = new Date().toISOString();
-  const changes = saveOrderStatus(id, status, updatedAt);
+  const { changes } = saveOrderStatus(id, status, updatedAt, config.adminUsername);
   if (changes === 0) {
     return { error: "No se encontró el pedido.", statusCode: 404 };
   }
@@ -99,7 +120,7 @@ export function changeOrderStatus(id, status) {
 }
 
 export function removeOrder(id) {
-  const changes = deleteOrder(id);
+  const changes = deleteOrder(id, config.adminUsername);
 
   if (changes === 0) {
     return { error: "No se encontró el pedido.", statusCode: 404 };

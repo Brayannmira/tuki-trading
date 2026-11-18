@@ -829,6 +829,14 @@ body {
   color: #ffaaa5;
 }
 
+.admin-notice {
+  padding: 11px 13px;
+  border: 1px solid rgba(63, 185, 80, 0.45);
+  border-radius: 8px;
+  background: rgba(63, 185, 80, 0.1);
+  color: #a7e6ae;
+}
+
 .trade-form-success {
   padding: 13px;
   border: 1px solid rgba(63, 185, 80, 0.45);
@@ -1225,6 +1233,62 @@ body {
   margin-bottom: 34px;
 }
 
+.admin-password-card {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 34px;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(18, 18, 24, 0.7);
+}
+
+.admin-password-card h2,
+.admin-password-card p {
+  margin: 0;
+}
+
+.admin-password-card h2 {
+  color: #f0f6fc;
+  font-size: 1.15rem;
+}
+
+.admin-password-card p {
+  color: #aeb8c6;
+  font-size: 0.88rem;
+}
+
+.admin-password-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+}
+
+.admin-password-form label {
+  display: grid;
+  gap: 7px;
+  color: #e4e9f1;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.admin-password-form input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  border: 1px solid #3c4655;
+  border-radius: 8px;
+  background: rgba(9, 13, 19, 0.78);
+  color: #f0f6fc;
+  font: inherit;
+}
+
+.admin-password-form input:focus {
+  border-color: #e8c85a;
+  outline: 2px solid rgba(232, 200, 90, 0.2);
+}
+
 .admin-dashboard-heading h2,
 .admin-orders-heading h2 {
   margin: 0;
@@ -1435,6 +1499,20 @@ body {
   gap: 14px;
 }
 
+.admin-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 20px;
+  color: #aeb8c6;
+}
+
+.admin-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .admin-order-card,
 .admin-empty {
   padding: 18px;
@@ -1517,6 +1595,10 @@ body {
     gap: 12px;
   }
 
+  .admin-password-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .admin-stat-card {
     padding: 16px;
   }
@@ -1562,6 +1644,10 @@ body {
     flex: 1 1 150px;
   }
 
+  .admin-pagination {
+    gap: 10px;
+  }
+
   .offer-box {
     width: min(100%, 360px);
     min-height: 440px;
@@ -1579,4 +1665,3 @@ body {
     transition: none;
   }
 }
-

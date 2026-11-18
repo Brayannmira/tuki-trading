@@ -1,4 +1,7 @@
-import { hasValidAdminCredentials } from "../services/admin.service.js";
+import {
+  changeAdminPassword as updateAdminPassword,
+  hasValidAdminCredentials,
+} from "../services/admin.service.js";
 import {
   clearSessionCookie,
   hasValidSession,
@@ -23,4 +26,18 @@ export function getSession(request, response) {
 export function logout(_request, response) {
   clearSessionCookie(response);
   response.status(204).end();
+}
+
+export function changePassword(request, response) {
+  const result = updateAdminPassword(
+    request.body?.currentPassword,
+    request.body?.newPassword,
+  );
+
+  if (result.error) {
+    return response.status(result.statusCode).json({ error: result.error });
+  }
+
+  clearSessionCookie(response);
+  return response.json({ passwordChanged: true });
 }

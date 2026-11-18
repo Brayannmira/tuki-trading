@@ -23,6 +23,7 @@ export const config = {
   adminUsername: ADMIN_USERNAME,
   adminPassword: ADMIN_PASSWORD,
   sessionSecret: SESSION_SECRET,
+  appOrigin: new URL(process.env.APP_ORIGIN || "http://localhost:5173").origin,
   port: Number(process.env.PORT || 3001),
   isProduction: process.env.NODE_ENV === "production",
   databasePath: process.env.DATABASE_PATH

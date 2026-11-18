@@ -26,6 +26,22 @@ database.exec(`
     name TEXT NOT NULL,
     category TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS admin_credentials (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    password_hash TEXT NOT NULL,
+    session_version INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('order.status_changed', 'order.deleted')),
+    entity_id TEXT NOT NULL,
+    details TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS admin_audit_log_entity_created
+    ON admin_audit_log (entity_id, created_at DESC);
 `);
 
 const orderColumns = database.prepare("PRAGMA table_info(orders)").all();
