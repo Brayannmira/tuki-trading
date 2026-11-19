@@ -3,10 +3,11 @@ import database from "../db/database.js";
 export function insertOrder(order) {
   const insertOrderStatement = database.prepare(`
     INSERT INTO orders (
-      id, tracking_token_hash, real_name, game_nickname, payment_method,
-      total_amount, currency, created_at, updated_at
+      id, tracking_token_hash, real_name, game_nickname, customer_email, payment_method,
+      total_amount, currency, idempotency_key_hash, idempotency_request_hash,
+      tracking_token_encrypted, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertItemStatement = database.prepare(
     `INSERT INTO order_items (
@@ -14,8 +15,16 @@ export function insertOrder(order) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
 
-  database.exec("BEGIN");
+  database.exec("BEGIN IMMEDIATE");
   try {
+    if (order.idempotencyKeyHash) {
+      const existingOrder = selectIdempotentOrder(order.idempotencyKeyHash);
+      if (existingOrder) {
+        database.exec("ROLLBACK");
+        return { existingOrder };
+      }
+    }
+
     const quantitiesByProduct = new Map();
     for (const item of order.items) {
       if (!item.productId) continue;
@@ -50,9 +59,13 @@ export function insertOrder(order) {
       order.trackingTokenHash,
       order.realName,
       order.gameNickname,
+      order.customerEmail ?? null,
       order.paymentMethod,
       order.totalAmount ?? null,
       order.currency ?? null,
+      order.idempotencyKeyHash ?? null,
+      order.idempotencyRequestHash ?? null,
+      order.trackingTokenEncrypted ?? null,
       order.createdAt,
       order.createdAt,
     );
@@ -72,6 +85,7 @@ export function insertOrder(order) {
       VALUES (?, 'Pendiente', ?)
     `).run(order.id, order.createdAt);
     database.exec("COMMIT");
+    return { created: true };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
@@ -92,11 +106,21 @@ export function countOrders(status) {
 export function selectOrdersPage({ limit, offset, status }) {
   const { clause, parameters } = orderStatusFilter(status);
   const orders = database.prepare(`
-    SELECT id, real_name, game_nickname, payment_method, status, total_amount, currency,
-      created_at, updated_at
-    FROM orders
+    SELECT order_record.id, order_record.real_name, order_record.game_nickname,
+      order_record.customer_email, order_record.payment_method, order_record.status,
+      order_record.total_amount, order_record.currency, order_record.created_at,
+      order_record.updated_at,
+      (SELECT notification.id
+        FROM order_status_notifications AS notification
+        WHERE notification.order_id = order_record.id
+        ORDER BY notification.id DESC LIMIT 1) AS notification_id,
+      (SELECT notification.delivery_status
+        FROM order_status_notifications AS notification
+        WHERE notification.order_id = order_record.id
+        ORDER BY notification.id DESC LIMIT 1) AS notification_status
+    FROM orders AS order_record
     ${clause}
-    ORDER BY created_at DESC, id DESC
+    ORDER BY order_record.created_at DESC, order_record.id DESC
     LIMIT ? OFFSET ?
   `).all(...parameters, limit, offset);
 
@@ -129,12 +153,19 @@ export function selectOrdersPage({ limit, offset, status }) {
     id: order.id,
     realName: order.real_name,
     gameNickname: order.game_nickname,
+    customerEmail: order.customer_email,
     paymentMethod: order.payment_method,
     status: order.status,
     totalAmount: order.total_amount,
     currency: order.currency,
     createdAt: order.created_at,
     updatedAt: order.updated_at,
+    notification: order.notification_id === null
+      ? null
+      : {
+        id: order.notification_id,
+        status: order.notification_status,
+      },
     items: itemsByOrder.get(order.id) ?? [],
   }));
 }
@@ -256,11 +287,20 @@ export function saveCatalogProducts(products) {
   }
 }
 
+export function selectIdempotentOrder(idempotencyKeyHash) {
+  return database.prepare(`
+    SELECT id, status, total_amount, currency, created_at,
+      idempotency_request_hash, tracking_token_encrypted
+    FROM orders
+    WHERE idempotency_key_hash = ?
+  `).get(idempotencyKeyHash);
+}
+
 export function updateOrderStatus(id, status, updatedAt, actor) {
   database.exec("BEGIN");
   try {
     const order = database
-      .prepare("SELECT status FROM orders WHERE id = ?")
+      .prepare("SELECT status, customer_email FROM orders WHERE id = ?")
       .get(id);
 
     if (!order) {
@@ -325,6 +365,7 @@ export function updateOrderStatus(id, status, updatedAt, actor) {
       .prepare("UPDATE orders SET status = ?, updated_at = ? WHERE id = ?")
       .run(status, updatedAt, id).changes;
 
+    let notificationId = null;
     if (order.status !== status) {
       database.prepare(`
         INSERT INTO order_status_history (order_id, status, changed_at)
@@ -339,13 +380,53 @@ export function updateOrderStatus(id, status, updatedAt, actor) {
         JSON.stringify({ from: order.status, to: status }),
         updatedAt,
       );
+      if (["En proceso", "Completado"].includes(status) && order.customer_email) {
+        const notification = database.prepare(`
+          INSERT INTO order_status_notifications (
+            order_id, status, recipient_email, created_at
+          ) VALUES (?, ?, ?, ?)
+        `).run(id, status, order.customer_email, updatedAt);
+        notificationId = Number(notification.lastInsertRowid);
+      }
     }
     database.exec("COMMIT");
-    return { changes };
+    return { changes, notificationId };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
   }
+}
+
+export function selectOrderStatusNotification(id) {
+  return database.prepare(`
+    SELECT id, order_id, status, recipient_email, delivery_status, attempts, last_error
+    FROM order_status_notifications
+    WHERE id = ?
+  `).get(id);
+}
+
+export function recordOrderStatusNotificationAttempt(id) {
+  return database.prepare(`
+    UPDATE order_status_notifications
+    SET attempts = attempts + 1, last_error = NULL
+    WHERE id = ? AND delivery_status != 'sent'
+  `).run(id).changes;
+}
+
+export function markOrderStatusNotificationSent(id, sentAt) {
+  return database.prepare(`
+    UPDATE order_status_notifications
+    SET delivery_status = 'sent', last_error = NULL, sent_at = ?
+    WHERE id = ? AND delivery_status != 'sent'
+  `).run(sentAt, id).changes;
+}
+
+export function markOrderStatusNotificationFailed(id, errorMessage) {
+  return database.prepare(`
+    UPDATE order_status_notifications
+    SET delivery_status = 'failed', last_error = ?
+    WHERE id = ? AND delivery_status != 'sent'
+  `).run(errorMessage, id).changes;
 }
 
 export function deleteOrder(id, actor) {

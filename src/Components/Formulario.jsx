@@ -1,11 +1,40 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useSelection } from "./SelectionContext.js";
+
+const pendingIdempotencyKeyStorageKey = "tuki-trading-pending-order-key";
+
+function readPendingIdempotencyKey() {
+  try {
+    const key = sessionStorage.getItem(pendingIdempotencyKeyStorageKey);
+    return key && /^[A-Za-z0-9_-]{22,128}$/.test(key) ? key : null;
+  } catch (error) {
+    console.error("No se pudo recuperar la clave de reintento:", error);
+    return null;
+  }
+}
+
+function savePendingIdempotencyKey(key) {
+  try {
+    sessionStorage.setItem(pendingIdempotencyKeyStorageKey, key);
+  } catch (error) {
+    console.error("No se pudo guardar la clave de reintento:", error);
+  }
+}
+
+function clearPendingIdempotencyKey() {
+  try {
+    sessionStorage.removeItem(pendingIdempotencyKeyStorageKey);
+  } catch (error) {
+    console.error("No se pudo borrar la clave de reintento:", error);
+  }
+}
 
 function Formulario() {
   const { selectedItems, toggleItem, updateQuantity, clearSelection } = useSelection();
   const [realName, setRealName] = useState("");
   const [gameNickname, setGameNickname] = useState("");
+  const [email, setEmail] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("Platino");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionError, setSubmissionError] = useState("");
@@ -15,6 +44,14 @@ function Formulario() {
   const [createdOrderCurrency, setCreatedOrderCurrency] = useState("");
   const [catalogProducts, setCatalogProducts] = useState([]);
   const [catalogError, setCatalogError] = useState("");
+  const submissionInProgress = useRef(false);
+  const idempotencyAttempt = useRef(undefined);
+  if (idempotencyAttempt.current === undefined) {
+    const pendingKey = readPendingIdempotencyKey();
+    idempotencyAttempt.current = pendingKey
+      ? { key: pendingKey, serializedOrder: null }
+      : null;
+  }
   const priceKey = paymentMethod === "Dinero (COP)" ? "priceCop" : "pricePlatinum";
   const productsById = useMemo(
     () => Object.fromEntries(catalogProducts.map((product) => [product.id, product])),
@@ -31,6 +68,10 @@ function Formulario() {
       0,
     )
     : null;
+  const selectedQuantity = selectedItems.reduce(
+    (total, item) => total + (item.quantity ?? 1),
+    0,
+  );
 
   useEffect(() => {
     let active = true;
@@ -58,6 +99,34 @@ function Formulario() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (submissionInProgress.current || selectedItems.length === 0) return;
+
+    const orderPayload = {
+      realName,
+      gameNickname,
+      email,
+      paymentMethod,
+      items: selectedItems.map((item) => ({
+        id: item.catalogId,
+        name: item.name,
+        category: item.category,
+        quantity: item.quantity ?? 1,
+      })),
+    };
+    const serializedOrder = JSON.stringify(orderPayload);
+    if (!idempotencyAttempt.current ||
+      (idempotencyAttempt.current.serializedOrder !== null &&
+        idempotencyAttempt.current.serializedOrder !== serializedOrder)) {
+      idempotencyAttempt.current = {
+        key: globalThis.crypto.randomUUID(),
+        serializedOrder,
+      };
+    } else {
+      idempotencyAttempt.current.serializedOrder = serializedOrder;
+    }
+    savePendingIdempotencyKey(idempotencyAttempt.current.key);
+
+    submissionInProgress.current = true;
     setIsSubmitting(true);
     setSubmissionError("");
     setCreatedOrderId("");
@@ -66,25 +135,24 @@ function Formulario() {
     try {
       const response = await fetch("/api/orders", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          realName,
-          gameNickname,
-          paymentMethod,
-          items: selectedItems.map((item) => ({
-            id: item.catalogId,
-            name: item.name,
-            category: item.category,
-            quantity: item.quantity ?? 1,
-          })),
-        }),
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyAttempt.current.key,
+        },
+        body: serializedOrder,
       });
       const result = await response.json();
 
       if (!response.ok) {
+        if (response.status < 500) {
+          idempotencyAttempt.current = null;
+          clearPendingIdempotencyKey();
+        }
         throw new Error(result.error || "No se pudo enviar la solicitud.");
       }
 
+      idempotencyAttempt.current = null;
+      clearPendingIdempotencyKey();
       setCreatedOrderId(result.id);
       setCreatedTrackingToken(result.trackingToken);
       setCreatedOrderTotal(result.totalAmount);
@@ -93,6 +161,7 @@ function Formulario() {
     } catch (error) {
       setSubmissionError(error.message || "No se pudo conectar con el servidor.");
     } finally {
+      submissionInProgress.current = false;
       setIsSubmitting(false);
     }
   };
@@ -128,6 +197,18 @@ function Formulario() {
               required
             />
           </label>
+          <label>
+            <span>Correo electrónico</span>
+            <input
+              type="email"
+              autoComplete="email"
+              maxLength={254}
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              disabled={isSubmitting}
+              required
+            />
+          </label>
         </div>
 
         <fieldset className="payment-options">
@@ -158,8 +239,9 @@ function Formulario() {
                   <span>
                     <strong>{item.name}</strong>
                     <small>{item.category}</small>
+                    <small>Precio unitario: {formatPrice(getItemPrice(item))}</small>
                     <small>
-                      {formatPrice(getItemPrice(item))} · Subtotal:{" "}
+                      Subtotal:{" "}
                       {getItemPrice(item) === null
                         ? "Por cotizar"
                         : formatPrice(getItemPrice(item) * (item.quantity ?? 1))}
@@ -190,15 +272,23 @@ function Formulario() {
           )}
           {selectedItems.length > 0 && (
             <p className="cart-total" aria-live="polite">
-              Total estimado:{" "}
+              Total estimado ({selectedQuantity}{" "}
+              {selectedQuantity === 1 ? "unidad" : "unidades"}):{" "}
               {estimatedTotal === null ? "Pendiente por cotizar" : formatPrice(estimatedTotal)}
             </p>
           )}
         </div>
 
+        <p id="order-conditions" className="trade-form-conditions">
+          Al enviar, registras una solicitud; no se realiza un cobro ni se confirma
+          disponibilidad o entrega. Usaremos tu correo para avisarte cuando el pedido
+          pase a “En proceso” o “Completado”. Revisaremos los artículos y te confirmaremos
+          el precio final y el estado del pedido.
+        </p>
         <button
           className="trade-form-submit"
           type="submit"
+          aria-describedby="order-conditions"
           disabled={selectedItems.length === 0 || isSubmitting}
         >
           {isSubmitting ? "Enviando solicitud..." : "Enviar solicitud"}

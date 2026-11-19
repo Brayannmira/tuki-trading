@@ -15,6 +15,7 @@ test("customer can submit and track a request", async ({ page }) => {
   await page.getByRole("link", { name: "Ir al formulario" }).click();
   await page.getByLabel("Nombre real").fill("Playwright Customer");
   await page.getByLabel("Nickname del juego").fill("PlaywrightTenno");
+  await page.getByLabel("Correo electrónico").fill("customer@example.com");
   await page.getByLabel("Dinero (COP)").check();
   await page.getByRole("button", { name: "Enviar solicitud" }).click();
 

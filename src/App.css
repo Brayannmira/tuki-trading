@@ -200,6 +200,17 @@ body {
   text-align: center;
 }
 
+.trade-form-conditions {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(138, 180, 248, 0.18);
+  border-radius: 8px;
+  background: rgba(22, 27, 34, 0.6);
+  color: #c4ccd8;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
 .trade-form-error,
 .admin-error {
   padding: 11px 13px;
@@ -1342,6 +1353,40 @@ body {
   font-size: 0.7rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.admin-order-email {
+  margin: 5px 0 0;
+  color: #c4b5fd;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-email-notification {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(245, 158, 11, 0.38);
+  border-radius: 8px;
+  background: rgba(120, 53, 15, 0.16);
+  color: #fde68a;
+  font-size: 0.78rem;
+}
+
+.admin-email-notification.failed {
+  border-color: rgba(248, 81, 73, 0.45);
+  background: rgba(127, 29, 29, 0.2);
+  color: #ffaaa5;
+}
+
+.admin-email-notification.sent {
+  border-color: rgba(63, 185, 80, 0.38);
+  background: rgba(22, 101, 52, 0.16);
+  color: #a7e6ae;
 }
 
 .admin-order-footer {

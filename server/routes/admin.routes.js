@@ -15,6 +15,7 @@ import {
   deleteOrder,
   listOrders,
   listAdminAudit,
+  retryOrderStatusNotification,
   updateOrderStatus,
 } from "../controllers/orders.controller.js";
 import { requireAdmin, requireSameOrigin } from "../middleware/adminAuth.js";
@@ -32,6 +33,12 @@ adminRouter.post("/logout", requireSameOrigin, logout);
 adminRouter.get("/orders", requireAdmin, listOrders);
 adminRouter.post("/password", requireAdmin, requireSameOrigin, loginRateLimit, changePassword);
 adminRouter.patch("/orders/:id/status", requireAdmin, requireSameOrigin, updateOrderStatus);
+adminRouter.post(
+  "/notifications/:notificationId/retry",
+  requireAdmin,
+  requireSameOrigin,
+  retryOrderStatusNotification,
+);
 adminRouter.delete("/orders/:id", requireAdmin, requireSameOrigin, deleteOrder);
 adminRouter.get("/catalog", requireAdmin, listAdminCatalog);
 adminRouter.patch("/catalog/:id", requireAdmin, requireSameOrigin, updateCatalogItem);

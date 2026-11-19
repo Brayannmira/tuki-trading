@@ -14,11 +14,15 @@ database.exec(`
     tracking_token_hash TEXT,
     real_name TEXT NOT NULL,
     game_nickname TEXT NOT NULL,
+    customer_email TEXT,
     payment_method TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'Pendiente'
       CHECK (status IN ('Pendiente', 'En proceso', 'Completado', 'Cancelado')),
     total_amount INTEGER CHECK (total_amount IS NULL OR total_amount >= 0),
     currency TEXT CHECK (currency IS NULL OR currency IN ('COP', 'Platino')),
+    idempotency_key_hash TEXT,
+    idempotency_request_hash TEXT,
+    tracking_token_encrypted TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -50,11 +54,42 @@ database.exec(`
       CHECK (status IN ('Pendiente', 'En proceso', 'Completado', 'Cancelado')),
     changed_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS order_status_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('En proceso', 'Completado')),
+    recipient_email TEXT NOT NULL,
+    delivery_status TEXT NOT NULL DEFAULT 'pending'
+      CHECK (delivery_status IN ('pending', 'sent', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    sent_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS admin_credentials (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     password_hash TEXT NOT NULL,
     session_version INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS customer_accounts (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    email_verified_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS customer_login_codes (
+    email TEXT PRIMARY KEY,
+    code_hash TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+    expires_at TEXT NOT NULL,
+    requested_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS customer_sessions (
+    token_hash TEXT PRIMARY KEY,
+    customer_id TEXT NOT NULL REFERENCES customer_accounts(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS admin_audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +115,23 @@ if (!orderColumns.some((column) => column.name === "tracking_token_hash")) {
   if (!orderColumns.some((column) => column.name === "currency")) {
     database.exec("ALTER TABLE orders ADD COLUMN currency TEXT");
   }
+  if (!orderColumns.some((column) => column.name === "customer_email")) {
+    database.exec("ALTER TABLE orders ADD COLUMN customer_email TEXT");
+  }
+  if (!orderColumns.some((column) => column.name === "idempotency_key_hash")) {
+    database.exec("ALTER TABLE orders ADD COLUMN idempotency_key_hash TEXT");
+  }
+  if (!orderColumns.some((column) => column.name === "idempotency_request_hash")) {
+    database.exec("ALTER TABLE orders ADD COLUMN idempotency_request_hash TEXT");
+  }
+  if (!orderColumns.some((column) => column.name === "tracking_token_encrypted")) {
+    database.exec("ALTER TABLE orders ADD COLUMN tracking_token_encrypted TEXT");
+  }
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS orders_idempotency_key_hash
+      ON orders (idempotency_key_hash)
+      WHERE idempotency_key_hash IS NOT NULL
+  `);
 
   const orderItemColumns = database.prepare("PRAGMA table_info(order_items)").all();
   const orderItemMigrations = [
@@ -94,6 +146,18 @@ if (!orderColumns.some((column) => column.name === "tracking_token_hash")) {
     }
   }
   database.exec("CREATE INDEX IF NOT EXISTS order_items_product_id ON order_items (product_id)");
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS order_status_notifications_order_created
+      ON order_status_notifications (order_id, created_at DESC)
+  `);
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS orders_customer_email_created
+      ON orders (lower(trim(customer_email)), created_at DESC)
+  `);
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS customer_sessions_expiration
+      ON customer_sessions (expires_at)
+  `);
   database.exec(`
     INSERT INTO order_status_history (order_id, status, changed_at)
     SELECT orders.id, orders.status, orders.updated_at

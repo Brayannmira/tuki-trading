@@ -174,6 +174,7 @@ function AdminPage() {
   const [loading, setLoading] = useState(false);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [deletingOrderId, setDeletingOrderId] = useState("");
+  const [retryingNotificationId, setRetryingNotificationId] = useState(null);
   const [vaultOpening, setVaultOpening] = useState(false);
   const [backupLoading, setBackupLoading] = useState(false);
   const [orderStatusFilter, setOrderStatusFilter] = useState("Todos");
@@ -321,6 +322,7 @@ function AdminPage() {
 
   const updateOrderStatus = async (orderId, status) => {
     setError("");
+    setNotice("");
 
     try {
       const response = await fetch(`/api/admin/orders/${encodeURIComponent(orderId)}/status`, {
@@ -329,10 +331,44 @@ function AdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       });
-      await readJsonResponse(response);
+      const result = await readJsonResponse(response);
+      if (result.notification?.status === "sent") {
+        setNotice("Estado actualizado y aviso enviado al cliente.");
+      } else if (result.notification) {
+        setError(result.notification.message);
+      } else {
+        setNotice("Estado del pedido actualizado.");
+      }
       await loadOrders(page, orderStatusFilter);
     } catch (requestError) {
       setError(requestError.message);
+    }
+  };
+
+  const retryNotification = async (notificationId) => {
+    setRetryingNotificationId(notificationId);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch(
+        `/api/admin/notifications/${notificationId}/retry`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+        },
+      );
+      const result = await readJsonResponse(response);
+      if (result.status === "sent") {
+        setNotice("Aviso enviado al cliente.");
+      } else {
+        setError(result.message || "El aviso sigue pendiente de envío.");
+      }
+      await loadOrders(page, orderStatusFilter);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setRetryingNotificationId(null);
     }
   };
 
@@ -798,6 +834,11 @@ function AdminPage() {
                         <span> · </span>
                         {order.paymentMethod}
                       </p>
+                      {order.customerEmail && (
+                        <p className="admin-order-email">
+                          Correo para avisos: {order.customerEmail}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <time className="admin-order-date" dateTime={order.createdAt}>
@@ -831,6 +872,33 @@ function AdminPage() {
                       ? `$${new Intl.NumberFormat("es-CO").format(order.totalAmount)} COP`
                       : `${new Intl.NumberFormat("es-CO").format(order.totalAmount)} platinos`}
                 </p>
+                {order.notification && (
+                  <div
+                    className={`admin-email-notification ${order.notification.status}`}
+                    role="status"
+                  >
+                    <span>
+                      Aviso por correo:{" "}
+                      {order.notification.status === "sent"
+                        ? "enviado"
+                        : order.notification.status === "failed"
+                          ? "falló"
+                          : "pendiente"}
+                    </span>
+                    {order.notification.status !== "sent" && (
+                      <button
+                        type="button"
+                        className="admin-secondary-button"
+                        onClick={() => retryNotification(order.notification.id)}
+                        disabled={retryingNotificationId === order.notification.id}
+                      >
+                        {retryingNotificationId === order.notification.id
+                          ? "Reintentando..."
+                          : "Reintentar aviso"}
+                      </button>
+                    )}
+                  </div>
+                )}
                 <footer className="admin-order-footer">
                   <label className="admin-status-label">
                     <span>Estado del pedido</span>

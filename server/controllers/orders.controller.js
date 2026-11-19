@@ -7,6 +7,8 @@ import {
   orderStatuses,
   removeOrder,
   getAdminAuditLog,
+  isValidIdempotencyKey,
+  deliverOrderStatusNotification,
 } from "../services/orders.service.js";
 
 const defaultPage = 1;
@@ -22,12 +24,17 @@ function parsePositiveInteger(value) {
 
 export function createOrder(request, response) {
   const orderData = request.body ?? {};
+  const idempotencyKey = request.get("Idempotency-Key");
+
+  if (idempotencyKey !== undefined && !isValidIdempotencyKey(idempotencyKey)) {
+    return response.status(400).json({ error: "La clave de reintento no es válida." });
+  }
 
   if (!isValidOrder(orderData)) {
     return response.status(400).json({ error: "Revisa los datos y artículos de la solicitud." });
   }
 
-  const result = saveOrder(orderData);
+  const result = saveOrder(orderData, idempotencyKey);
   if (result.error) {
     return response.status(result.statusCode).json({ error: result.error });
   }
@@ -71,14 +78,35 @@ export function getOrderStatus(request, response) {
   return response.json(result);
 }
 
-export function updateOrderStatus(request, response) {
+export async function updateOrderStatus(request, response) {
   const result = saveOrderStatus(request.params.id, request.body?.status);
 
   if (result.error) {
     return response.status(result.statusCode).json({ error: result.error });
   }
 
-  response.json(result);
+  const notification = result.notificationId
+    ? await deliverOrderStatusNotification(result.notificationId)
+    : null;
+  return response.json({
+    id: result.id,
+    status: result.status,
+    updatedAt: result.updatedAt,
+    notification,
+  });
+}
+
+export async function retryOrderStatusNotification(request, response) {
+  const notificationId = parsePositiveInteger(request.params.notificationId);
+  if (notificationId === null) {
+    return response.status(400).json({ error: "El identificador de notificación no es válido." });
+  }
+
+  const result = await deliverOrderStatusNotification(notificationId);
+  if (result.error) {
+    return response.status(result.statusCode).json({ error: result.error });
+  }
+  return response.json(result);
 }
 
 export function deleteOrder(request, response) {

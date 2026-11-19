@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, test } from "node:test";
+import { after, before, mock, test } from "node:test";
 
 const testDirectory = mkdtempSync(join(tmpdir(), "tuki-pagination-test-"));
 const sessionSecret = "pagination-test-secret-that-is-long-enough";
@@ -13,6 +13,26 @@ process.env.ADMIN_PASSWORD = "pagination-test-password";
 process.env.SESSION_SECRET = sessionSecret;
 process.env.APP_ORIGIN = "http://localhost:5173";
 process.env.DATABASE_PATH = join(testDirectory, "orders.sqlite");
+process.env.SMTP_HOST = "smtp.test";
+process.env.SMTP_PORT = "587";
+process.env.SMTP_SECURE = "false";
+process.env.SMTP_USER = "smtp-test-user";
+process.env.SMTP_PASSWORD = "smtp-test-password";
+process.env.SMTP_FROM = "Tuki Trading <orders@example.com>";
+
+const sentEmails = [];
+let failNextEmail = false;
+const nodemailer = await import("nodemailer");
+mock.method(nodemailer.default, "createTransport", () => ({
+  sendMail: async (message) => {
+    if (failNextEmail) {
+      failNextEmail = false;
+      throw new Error("SMTP temporary failure");
+    }
+    sentEmails.push(message);
+    return { accepted: [message.to], rejected: [] };
+  },
+}));
 
 const [
   { createApp },
@@ -22,10 +42,12 @@ const [
     updateOrderStatus: saveOrderStatus,
     deleteOrder: removeOrderRecord,
   },
+  { isValidOrder },
 ] = await Promise.all([
   import("../app.js"),
   import("../db/database.js"),
   import("../repositories/orders.repository.js"),
+  import("../services/orders.service.js"),
 ]);
 
 const statuses = ["Pendiente", "En proceso", "Completado", "Cancelado"];
@@ -152,34 +174,93 @@ test("rejects invalid pagination and status parameters", async () => {
 });
 
 test("creates an order and returns a one-time tracking token", async () => {
-  const response = await request("/api/orders", {
+  const idempotencyKey = randomUUID();
+  const orderData = {
+    realName: "  Test Customer ",
+    gameNickname: "TestPlayer",
+    email: "customer@example.com",
+    paymentMethod: "Platino",
+    items: [{ name: "Test Weapon", category: "Melee" }],
+  };
+  const options = {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      realName: "  Test Customer ",
-      gameNickname: "TestPlayer",
-      paymentMethod: "Platino",
-      items: [{ name: "Test Weapon", category: "Melee" }],
-    }),
-  });
-  createdOrder = await response.json();
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": idempotencyKey,
+    },
+    body: JSON.stringify(orderData),
+  };
+  const [response, retryResponse] = await Promise.all([
+    request("/api/orders", options),
+    request("/api/orders", options),
+  ]);
+  const [firstResult, retry] = await Promise.all([
+    response.json(),
+    retryResponse.json(),
+  ]);
+  createdOrder = firstResult;
 
   assert.equal(response.status, 201);
+  assert.equal(retryResponse.status, 201);
   assert.match(createdOrder.id, /^[\da-f-]{36}$/i);
   assert.equal(createdOrder.status, "Pendiente");
   assert.equal(createdOrder.trackingToken.length, 43);
+  assert.equal(retry.id, createdOrder.id);
+  assert.equal(retry.trackingToken, createdOrder.trackingToken);
   assert.equal(
     database.prepare("SELECT real_name FROM orders WHERE id = ?").get(createdOrder.id).real_name,
     "Test Customer",
+  );
+  assert.equal(
+    database.prepare("SELECT customer_email FROM orders WHERE id = ?")
+      .get(createdOrder.id).customer_email,
+    "customer@example.com",
   );
   assert.notEqual(
     database.prepare("SELECT tracking_token_hash FROM orders WHERE id = ?")
       .get(createdOrder.id).tracking_token_hash,
     createdOrder.trackingToken,
   );
+
+  assert.equal(
+    database.prepare("SELECT COUNT(*) AS total FROM orders WHERE id = ?")
+      .get(createdOrder.id).total,
+    1,
+  );
+  const storedToken = database.prepare(
+    "SELECT tracking_token_encrypted FROM orders WHERE id = ?",
+  ).get(createdOrder.id).tracking_token_encrypted;
+  assert.ok(storedToken);
+  assert.notEqual(storedToken, createdOrder.trackingToken);
+
+  const changedPayloadResponse = await request("/api/orders", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": idempotencyKey,
+    },
+    body: JSON.stringify({ ...orderData, gameNickname: "DifferentPlayer" }),
+  });
+  assert.equal(changedPayloadResponse.status, 409);
+  assert.equal(
+    (await changedPayloadResponse.json()).error,
+    "La clave de reintento ya se usó con una solicitud diferente.",
+  );
+  assert.equal(database.prepare("SELECT COUNT(*) AS total FROM orders WHERE id = ?")
+    .get(createdOrder.id).total, 1);
 });
 
 test("rejects invalid order data without inserting an order", async () => {
+  const validOrder = {
+    realName: "Test Customer",
+    gameNickname: "TestPlayer",
+    email: "customer@example.com",
+    paymentMethod: "Platino",
+    items: [{ name: "Test Weapon", category: "Melee" }],
+  };
+  assert.equal(isValidOrder({ ...validOrder, email: undefined }), false);
+  assert.equal(isValidOrder({ ...validOrder, email: "not-an-email" }), false);
+
   const response = await request("/api/orders", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -293,6 +374,7 @@ test("admin manages catalog prices and an order snapshots totals and status hist
     body: JSON.stringify({
       realName: "Catalog Customer",
       gameNickname: "CatalogPlayer",
+      email: "catalog@example.com",
       paymentMethod: "Dinero (COP)",
       items: [{
         id: productId,
@@ -319,6 +401,7 @@ test("admin manages catalog prices and an order snapshots totals and status hist
   });
 
   for (const status of ["En proceso", "Completado"]) {
+    if (status === "Completado") failNextEmail = true;
     const updateStatus = await request(`/api/admin/orders/${pricedOrder.id}/status`, {
       method: "PATCH",
       headers: {
@@ -329,6 +412,45 @@ test("admin manages catalog prices and an order snapshots totals and status hist
       body: JSON.stringify({ status }),
     });
     assert.equal(updateStatus.status, 200);
+    const statusResult = await updateStatus.json();
+    if (status === "En proceso") {
+      assert.equal(statusResult.notification.status, "sent");
+      assert.equal(sentEmails[0].to, "catalog@example.com");
+      assert.match(sentEmails[0].subject, /En proceso|pedido/);
+      assert.equal(
+        database.prepare("SELECT delivery_status FROM order_status_notifications WHERE id = ?")
+          .get(statusResult.notification.id).delivery_status,
+        "sent",
+      );
+      const retryNotification = await request(
+        `/api/admin/notifications/${statusResult.notification.id}/retry`,
+        {
+          method: "POST",
+          headers: {
+            cookie: sessionCookie,
+            origin: process.env.APP_ORIGIN,
+          },
+        },
+      );
+      assert.equal(retryNotification.status, 200);
+      assert.equal((await retryNotification.json()).status, "sent");
+      assert.equal(sentEmails.length, 1);
+    } else {
+      assert.equal(statusResult.notification.status, "failed");
+      const retryNotification = await request(
+        `/api/admin/notifications/${statusResult.notification.id}/retry`,
+        {
+          method: "POST",
+          headers: {
+            cookie: sessionCookie,
+            origin: process.env.APP_ORIGIN,
+          },
+        },
+      );
+      assert.equal(retryNotification.status, 200);
+      assert.equal((await retryNotification.json()).status, "sent");
+      assert.equal(sentEmails.length, 2);
+    }
   }
 
   const trackedOrder = await request(`/api/orders/${pricedOrder.id}/status`, {
@@ -353,6 +475,7 @@ test("admin manages catalog prices and an order snapshots totals and status hist
     body: JSON.stringify({
       realName: "Catalog Customer",
       gameNickname: "CatalogPlayer",
+      email: "catalog@example.com",
       paymentMethod: "Dinero (COP)",
       items: [{
         id: productId,
@@ -385,6 +508,7 @@ test("admin manages catalog prices and an order snapshots totals and status hist
     body: JSON.stringify({
       realName: "Catalog Customer",
       gameNickname: "CatalogPlayer",
+      email: "catalog@example.com",
       paymentMethod: "Dinero (COP)",
       items: [{
         id: productId,
@@ -553,6 +677,7 @@ test("stock is reserved atomically and deleting a completed order restores it", 
       body: JSON.stringify({
         realName: "Concurrent Customer",
         gameNickname: "ConcurrentPlayer",
+        email: "concurrent@example.com",
         paymentMethod: "Dinero (COP)",
         items: [{ id: productId, name: "Concurrency Test", category: "Warframes", quantity: 1 }],
       }),
@@ -787,6 +912,7 @@ test("payment orders use the server snapshot and malformed JSON is rejected", as
     body: JSON.stringify({
       realName: "Quotation Customer",
       gameNickname: "QuotationPlayer",
+      email: "quotation@example.com",
       paymentMethod: "Dinero (COP)",
       items: [{
         id: "unpriced-test",

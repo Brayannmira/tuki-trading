@@ -9,6 +9,7 @@ const Catalogo = lazy(() => import("./Components/Catalogo.jsx"));
 const FormularioPage = lazy(() => import("./Components/FormularioPage.jsx"));
 const AdminPage = lazy(() => import("./Components/AdminPage.jsx"));
 const OrderStatusPage = lazy(() => import("./Components/OrderStatusPage.jsx"));
+const CustomerAccountPage = lazy(() => import("./Components/CustomerAccountPage.jsx"));
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
           <Route path="/catalogo" element={<Catalogo />} />
           <Route path="/formulario" element={<FormularioPage />} />
           <Route path="/consultar-pedido" element={<OrderStatusPage />} />
+          <Route path="/mi-cuenta" element={<CustomerAccountPage />} />
           <Route path="/admin" element={<AdminPage />} />
         </Routes>
       </Suspense>

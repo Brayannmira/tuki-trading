@@ -23,6 +23,9 @@ export default function Navbar() {
         <li className="nav-item">
           <NavLink to="/consultar-pedido">Consultar pedido</NavLink>
         </li>
+        <li className="nav-item">
+          <NavLink to="/mi-cuenta">Mis pedidos</NavLink>
+        </li>
       </ul>
 
       <div className="user-status"></div>

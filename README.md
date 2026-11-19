@@ -22,6 +22,7 @@ Aplicación para explorar artículos de Warframe y enviar solicitudes de pedido.
 - Precio en COP y platino, existencias y disponibilidad configurables para cada producto y pieza.
 - Carrito persistente con cantidades, subtotal por artículo y total estimado en la moneda seleccionada.
 - Consulta pública del estado del pedido mediante número y código de seguimiento, con una línea de tiempo de los cambios.
+- Portal opcional de clientes con acceso por código temporal de correo, historial de pedidos y consulta de estados sin el código de seguimiento.
 - Panel administrativo para iniciar sesión, revisar pedidos paginados, filtrar por estado, consultar métricas, cambiar estados, eliminar pedidos, administrar el catálogo e importar CSV.
 - Control de inventario al completar pedidos y validación de existencias antes de aceptar o completar un pedido.
 - Descarga manual de copias de seguridad SQLite y registro de auditoría para cambios de estado y eliminaciones.
@@ -35,6 +36,7 @@ Aplicación para explorar artículos de Warframe y enviar solicitudes de pedido.
 5. En `/formulario`, introduce el nombre real, el nickname y la forma de pago (`Platino` o `Dinero (COP)`). Cambia cantidades entre 1 y 99, quita artículos y revisa los subtotales y el total estimado.
 6. Al enviar, el servidor valida el catálogo y el inventario, determina los precios guardados en el servidor y crea el pedido. Si el precio de algún artículo no está definido para la moneda elegida, el total queda pendiente por cotizar. El carrito se vacía solo cuando la solicitud se crea correctamente.
 7. Guarda el número del pedido y el código de seguimiento mostrados al confirmar. En `/consultar-pedido` puedes consultar el estado y su historial; el código no se vuelve a mostrar.
+8. En `/mi-cuenta`, verifica el correo usado en tus pedidos con un código temporal para consultar el historial y los avisos de estado. El registro como cliente es opcional; el flujo de pedidos como invitado se conserva.
 
 El catálogo contiene datos estáticos para nombres, categorías, piezas, rarezas e imágenes, mientras que precios, existencias, disponibilidad y popularidad provienen de la API. El orden por precio se habilita cuando la categoría tiene precios configurados; el de popularidad, cuando hay unidades en pedidos completados. Los precios de los paquetes de platino se presentan como sugeridos en la interfaz y deben verificarse antes de usarlos como una lista comercial definitiva.
 
@@ -88,9 +90,11 @@ El archivo `.env.example` contiene los nombres y valores de ejemplo. Copia ese a
 | `ADMIN_USERNAME` | Sí | `admin` en el ejemplo | Usuario administrador. |
 | `ADMIN_PASSWORD` | Sí | Debe reemplazarse | Contraseña inicial, de 12 caracteres como mínimo. |
 | `SESSION_SECRET` | Sí | Debe reemplazarse | Secreto para firmar sesiones; debe tener al menos 32 caracteres aleatorios. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Para enviar correos | Sin configurar | Servidor y credenciales SMTP. Si configuras SMTP, completa todos estos valores. |
+| `SMTP_SECURE` | No | `false` cuando se configura SMTP | Usa `true` para TLS implícito, normalmente puerto 465; usa `false` para STARTTLS, normalmente puerto 587. |
 | `DATABASE_PATH` | No | `server/data/orders.sqlite` | Ruta opcional de la base de datos SQLite. Si se configura, se resuelve como ruta absoluta desde el directorio de trabajo. |
 
-Usa una contraseña única y un secreto aleatorio. No compartas ni subas `.env`; contiene credenciales y debe permanecer fuera del control de versiones. El servidor detiene el arranque si faltan `ADMIN_USERNAME`, `ADMIN_PASSWORD` o `SESSION_SECRET`, si la contraseña tiene menos de 12 caracteres o si el secreto tiene menos de 32. Cambiar `ADMIN_PASSWORD` después de que ya existe la credencial en SQLite no cambia la contraseña guardada; utiliza el cambio de contraseña del panel.
+Usa una contraseña única y un secreto aleatorio. No compartas ni subas `.env`; contiene credenciales y debe permanecer fuera del control de versiones. El servidor detiene el arranque si faltan `ADMIN_USERNAME`, `ADMIN_PASSWORD` o `SESSION_SECRET`, si la contraseña tiene menos de 12 caracteres o si el secreto tiene menos de 32. Si configuras SMTP, completa todas las variables SMTP requeridas; el servidor valida el puerto y `SMTP_SECURE`. Sin SMTP configurado, los pedidos se pueden crear, pero los avisos quedan pendientes, el panel permite reintentarlos y el acceso de clientes por correo responde `503` hasta que SMTP esté disponible. Cambiar `ADMIN_PASSWORD` después de que ya existe la credencial en SQLite no cambia la contraseña guardada; utiliza el cambio de contraseña del panel.
 
 Puedes generar un secreto desde PowerShell con Node:
 
@@ -109,6 +113,7 @@ Configura `NODE_ENV=production` en el entorno del servidor para activar la cooki
 | `/catalogo` | Catálogo, búsqueda y selección de productos. |
 | `/formulario` | Formulario para enviar una solicitud. |
 | `/consultar-pedido` | Consulta del estado con número y código de seguimiento. |
+| `/mi-cuenta` | Acceso por correo e historial privado de pedidos. |
 | `/admin` | Panel administrativo. |
 
 El carrito se guarda con la clave `tuki-trading-cart` y los favoritos con `tuki-trading-favorites` en el almacenamiento local del navegador. No se sincronizan entre dispositivos, perfiles o navegadores y no sustituyen el registro persistido del pedido. Si el navegador bloquea o borra `localStorage`, el carrito y favoritos pueden perderse.
@@ -129,6 +134,7 @@ Ejemplo de cuerpo:
 {
   "realName": "Nombre del cliente",
   "gameNickname": "Nickname",
+  "email": "cliente@example.com",
   "paymentMethod": "Platino",
   "items": [
     {
@@ -141,9 +147,13 @@ Ejemplo de cuerpo:
 }
 ```
 
-`paymentMethod` admite `Platino` o `Dinero (COP)`. El nombre real y el nickname deben tener de 1 a 100 caracteres; debe enviarse entre 1 y 100 artículos, cada uno con nombre de hasta 120 caracteres y categoría de hasta 80. `id` es opcional para compatibilidad con clientes anteriores y, si se envía, debe tener hasta 180 caracteres; la cantidad, si se envía, debe ser un entero entre 1 y 99. Los textos no pueden quedar vacíos después de quitar espacios. Para un ID de catálogo existente, el servidor rechaza artículos con estado `Agotado` o cantidad mayor a las existencias conocidas y obtiene los precios del catálogo, sin confiar en precios del navegador. Los demás estados se muestran como información y no impiden por sí solos crear el pedido.
+`paymentMethod` admite `Platino` o `Dinero (COP)`. El nombre real y el nickname deben tener de 1 a 100 caracteres; `email` es obligatorio, debe tener formato válido y no puede superar 254 caracteres. Debe enviarse entre 1 y 100 artículos, cada uno con nombre de hasta 120 caracteres y categoría de hasta 80. `id` es opcional y, si se envía, debe tener hasta 180 caracteres; la cantidad, si se envía, debe ser un entero entre 1 y 99. Los textos no pueden quedar vacíos después de quitar espacios. Para un ID de catálogo existente, el servidor rechaza artículos con estado `Agotado` o cantidad mayor a las existencias conocidas y obtiene los precios del catálogo, sin confiar en precios del navegador. Los demás estados se muestran como información y no impiden por sí solos crear el pedido.
 
-La respuesta `201` contiene `id`, `status`, `createdAt`, `trackingToken`, `currency` y `totalAmount`. `id` es un UUID generado por el servidor. Si algún artículo no tiene precio configurado en la moneda elegida, `totalAmount` es `null` y queda pendiente por cotizar. El código de seguimiento se genera a partir de 32 bytes aleatorios, se presenta como 43 caracteres Base64URL y se devuelve una sola vez; la base de datos conserva su hash SHA-256, no el código original. Guárdalo junto con el identificador.
+La respuesta `201` contiene `id`, `status`, `createdAt`, `trackingToken`, `currency` y `totalAmount`. `id` es un UUID generado por el servidor. Si algún artículo no tiene precio configurado en la moneda elegida, `totalAmount` es `null` y queda pendiente por cotizar. El código de seguimiento se genera a partir de 32 bytes aleatorios y se presenta como 43 caracteres Base64URL.
+
+Para hacer seguros los reintentos, envía el encabezado opcional `Idempotency-Key` con una clave aleatoria de 22 a 128 caracteres Base64URL (por ejemplo, un UUID). Reutiliza la misma clave únicamente al reintentar el mismo cuerpo: la API devuelve el mismo pedido y el mismo código de seguimiento, sin insertar otro pedido. Si se reutiliza la clave con datos diferentes, responde `409`. Sin este encabezado, se mantiene el comportamiento compatible anterior y no se deduplican reintentos. El formulario envía la clave automáticamente y la conserva en `sessionStorage` hasta recibir una respuesta exitosa.
+
+La base de datos conserva un hash de la clave y el código de seguimiento cifrado, nunca la clave ni el código en texto plano. Guarda el código de seguimiento que devuelve la respuesta junto con el identificador.
 
 Ejemplo de respuesta (los identificadores y token se generan en cada solicitud):
 
@@ -159,6 +169,12 @@ Ejemplo de respuesta (los identificadores y token se generan en cada solicitud):
 ```
 
 El total se calcula en el servidor a partir de los precios vigentes al crear el pedido y las cantidades. Los precios unitarios COP y platino quedan copiados en cada artículo del pedido; cambios futuros del catálogo no modifican esa cotización histórica. Una solicitud inválida responde `400`; si el artículo está agotado o la cantidad supera las existencias conocidas, responde `409`.
+
+#### Avisos de cambios de estado
+
+El correo ingresado al crear el pedido se usa para avisar cuando su estado cambia a `En proceso` o `Completado`. El mensaje incluye el identificador, el nuevo estado y un enlace a la consulta; no incluye el código secreto de seguimiento. El cambio de estado se guarda aunque el envío de correo falle.
+
+`PATCH /api/admin/orders/:id/status` incluye el resultado del aviso en `notification`. Si SMTP no está configurado, queda `pending`; si falla el proveedor, queda `failed`. El administrador puede reintentar desde el panel o con `POST /api/admin/notifications/:notificationId/retry`. Los pedidos creados antes de agregar el correo pueden seguir gestionándose, pero no generan notificaciones.
 
 #### Consultar el estado
 
@@ -182,6 +198,22 @@ Ejemplo de respuesta:
   ]
 }
 ```
+
+### Portal de clientes
+
+El portal `/mi-cuenta` permite iniciar sesión sin contraseña. El cliente solicita un código de 8 dígitos, lo recibe en el correo y lo verifica en la página. Los códigos vencen en 10 minutos, son de un solo uso, se guardan como HMAC (no en texto plano), y quedan bloqueados después de cinco intentos incorrectos. Hay un intervalo de 60 segundos entre envíos al mismo correo y límites por IP.
+
+| Método y ruta | Acceso | Comportamiento |
+| --- | --- | --- |
+| `POST /api/customer/auth/request-code` | Público; `Origin` requerido | Recibe `{ "email": "cliente@example.com" }`. Devuelve siempre el mismo mensaje `202` para correos válidos, para no revelar si ya existen pedidos. Responde `503` si SMTP no está configurado o no se pudo enviar el código. |
+| `POST /api/customer/auth/verify-code` | Público; `Origin` requerido | Recibe `{ "email": "cliente@example.com", "code": "12345678" }`; al verificarlo, crea la cuenta si hace falta y establece una cookie de sesión `HttpOnly`. |
+| `GET /api/customer/session` | Público | Indica si la cookie actual corresponde a una sesión válida. |
+| `POST /api/customer/logout` | Público; `Origin` requerido | Revoca la sesión actual, elimina la cookie y responde `204`. |
+| `GET /api/customer/orders?page=1&limit=10` | Sesión de cliente | Devuelve pedidos paginados asociados al correo verificado, con artículos, total, estados, historial y estado del último aviso. `limit` admite hasta 50. |
+
+La propiedad del historial se determina comparando el correo normalizado y verificado con el correo guardado en cada pedido. Por eso también aparecen pedidos anteriores y pedidos enviados como invitado que usaron esa misma dirección. La cuenta no permite consultar pedidos asociados a otros correos. El endpoint del historial no incluye códigos ni hashes de seguimiento.
+
+El código de acceso se envía por SMTP, igual que los avisos de estado. Si SMTP no está configurado, solicitar un código responde `503`; no se crea una sesión de respaldo ni se muestra el código en la respuesta. Configura SMTP antes de habilitar el portal. Las cuentas de correo compartidas permiten que cualquiera con acceso a esa bandeja vea los pedidos asociados a ella.
 
 #### Catálogo público
 
@@ -387,6 +419,8 @@ Los límites se aplican por dirección IP con `express-rate-limit`. En despliegu
 - Helmet agrega encabezados de seguridad y Express no expone el encabezado `X-Powered-By`.
 - Las contraseñas se guardan mediante `scrypt`; nunca se almacena el texto de la contraseña. Las sesiones son tokens firmados con HMAC-SHA-256, tienen vencimiento de ocho horas y se comparan de forma segura.
 - La cookie administrativa es `HttpOnly`, `SameSite=Strict`, limitada a `/` y `Secure` cuando `NODE_ENV=production`. El navegador no expone el token de sesión a JavaScript ni lo guarda en `localStorage`.
+- El acceso de clientes requiere verificar un código aleatorio de un solo uso enviado por correo. El código se almacena como HMAC, vence en diez minutos, permite hasta cinco intentos y tiene un intervalo de reenvío. Las sesiones de cliente duran siete días, se guardan en SQLite mediante un hash del token y se revocan al cerrar sesión.
+- La cookie de cliente también es `HttpOnly`, `SameSite=Strict`, limitada a `/` y `Secure` en producción. Las rutas del portal responden `Cache-Control: no-store`; el historial se filtra en el servidor por el correo verificado y no contiene códigos ni hashes de seguimiento.
 - Cada solicitud de administración requiere una sesión válida, excepto los endpoints públicos de inicio/cierre de sesión y consulta de sesión. Las escrituras administrativas también verifican que `Origin` coincida con `APP_ORIGIN`.
 - Todas las rutas `/api/admin` responden con `Cache-Control: no-store`; los cuerpos JSON tienen un límite de 25 KB.
 - Las rutas de pedidos e inicio de sesión/cambio de contraseña tienen límites por IP. Si la API se coloca detrás de un proxy inverso, configura el proxy y la confianza de IP de manera explícita y segura antes de basar los límites en la dirección del cliente.
@@ -486,17 +520,42 @@ Las versiones instaladas y los rangos de versión están definidos en `package.j
 
 ## Pruebas
 
-Ejecuta:
+Las pruebas de integración del servidor usan una base SQLite temporal que se elimina al terminar; no modifican la base local del proyecto. Cubren pedidos, precios e inventario, seguimiento e historial, acceso administrativo, auditoría, validaciones y respaldos.
+
+Las pruebas frontend usan Vitest y Testing Library. Para ejecutarlas junto con las pruebas del servidor:
+
+```powershell
+npm.cmd test
+```
+
+Para ejecutar por separado las pruebas del servidor o frontend:
 
 ```powershell
 npm.cmd run test:server
+npm.cmd run test:frontend
 ```
 
-Las pruebas levantan la aplicación en un puerto local temporal y usan una base SQLite temporal que se elimina al terminar. Cubren creación y validación de pedidos, precios e inventario, seguimiento e historial, acceso administrativo, cambio de contraseña, protección de origen, actualización y eliminación, paginación, auditoría e integridad de respaldos. No necesitan credenciales reales ni modifican la base local del proyecto.
+### Prueba E2E con Playwright
+
+El recorrido E2E verifica el flujo de pedido en Chromium de escritorio y móvil (viewport de 390 × 844): buscar un artículo, agregarlo al pedido, completar y enviar el formulario, y consultar el estado con el código de seguimiento. También comprueba que la página no exceda el ancho del viewport.
+
+Instala el navegador de Playwright una vez por entorno:
+
+```powershell
+npx.cmd playwright install chromium
+```
+
+Ejecuta la prueba:
+
+```powershell
+npm.cmd run test:e2e
+```
+
+Playwright inicia automáticamente Vite y una API exclusiva para las pruebas. Esta API usa una base SQLite temporal independiente y la elimina al finalizar; no se requieren credenciales reales ni se modifica la base de datos de desarrollo. Los reportes y resultados se guardan en `playwright-report/` y `test-results/`, carpetas excluidas de Git.
 
 ## Integración continua
 
-GitHub Actions ejecuta las pruebas del servidor, ESLint y la compilación del frontend al subir cambios a `main` o abrir/actualizar un Pull Request hacia `main`. El workflow está en `.github/workflows/ci.yml`, usa Ubuntu, Node.js 22 y `npm ci`; no requiere credenciales ni escribe en la base local. Para proteger `main`, configura en GitHub una regla de protección que exija el chequeo `Tests, lint, and build`.
+GitHub Actions ejecuta las pruebas del servidor y frontend, instala Chromium para Playwright, ejecuta el recorrido E2E de escritorio y móvil, ESLint y la compilación del frontend al subir cambios a `main` o abrir/actualizar un Pull Request hacia `main`. El workflow está en `.github/workflows/ci.yml`, usa Ubuntu, Node.js 22 y `npm ci`; no requiere credenciales reales ni escribe en la base local. Para proteger `main`, configura en GitHub una regla de protección que exija el chequeo `Tests, lint, and build`.
 
 ## Estructura del proyecto
 
@@ -505,6 +564,7 @@ src/
   Components/       Páginas, formularios, catálogo y componentes React
   Services/         Datos estáticos de catálogo, piezas y rarezas
   assets/           Recursos importados por el frontend
+e2e/                Pruebas de flujo completo con Playwright
 server/
   config/           Lectura y validación de variables de entorno
   controllers/      Traduce solicitudes HTTP a respuestas
@@ -516,6 +576,7 @@ server/
   tests/            Pruebas de integración del servidor
   app.js            Configura Express y conecta las rutas
   index.js          Punto de entrada de la API
+  playwright.js     Servidor aislado usado por las pruebas E2E
 public/             Recursos públicos servidos por Vite
 imagenes-warframe/  Imágenes importadas por el catálogo
 .github/workflows/  Automatización CI con GitHub Actions

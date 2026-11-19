@@ -1,4 +1,11 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+} from "node:crypto";
 import { config } from "../config/env.js";
 import {
   deleteOrder,
@@ -8,8 +15,13 @@ import {
   saveCatalogProduct,
   selectCatalogProduct,
   selectCatalogProducts,
+  selectIdempotentOrder,
   selectOrderSummary,
   selectOrderStatusHistory,
+  selectOrderStatusNotification,
+  recordOrderStatusNotificationAttempt,
+  markOrderStatusNotificationFailed,
+  markOrderStatusNotificationSent,
   selectOrderStatus,
   selectOrdersPage,
   selectAdminAuditLog,
@@ -31,11 +43,16 @@ function isValidText(value, maxLength) {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= maxLength;
 }
 
+function isValidEmail(value) {
+  return isValidText(value, 254) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
 export function isValidOrder(order) {
   return (
     order &&
     isValidText(order.realName, 100) &&
     isValidText(order.gameNickname, 100) &&
+    isValidEmail(order.email) &&
     allowedPaymentMethods.includes(order.paymentMethod) &&
     Array.isArray(order.items) &&
     order.items.length > 0 &&
@@ -50,6 +67,92 @@ export function isValidOrder(order) {
           (Number.isSafeInteger(item.quantity) && item.quantity >= 1 && item.quantity <= 99)),
     )
   );
+}
+
+export function isValidIdempotencyKey(key) {
+  return typeof key === "string" && /^[A-Za-z0-9_-]{22,128}$/.test(key);
+}
+
+function createIdempotencyContext(orderData, key) {
+  const normalizedOrder = {
+    realName: orderData.realName.trim(),
+    gameNickname: orderData.gameNickname.trim(),
+    email: orderData.email.trim(),
+    paymentMethod: orderData.paymentMethod,
+    items: orderData.items.map((item) => ({
+      id: item.id?.trim() ?? null,
+      name: item.name.trim(),
+      category: item.category.trim(),
+      quantity: item.quantity ?? 1,
+    })),
+  };
+  const requestHash = createHmac("sha256", key)
+    .update("tuki-order-request:")
+    .update(JSON.stringify(normalizedOrder))
+    .digest("hex");
+  const keyHash = createHash("sha256")
+    .update("tuki-order-idempotency-key:")
+    .update(key)
+    .digest("hex");
+
+  return { keyHash, requestHash };
+}
+
+function getTrackingTokenEncryptionKey(idempotencyKey) {
+  return createHmac("sha256", idempotencyKey)
+    .update("tuki-order-tracking-token-encryption:")
+    .digest();
+}
+
+function encryptTrackingToken(token, idempotencyKey) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    getTrackingTokenEncryptionKey(idempotencyKey),
+    iv,
+  );
+  const ciphertext = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
+  return [
+    iv.toString("base64url"),
+    cipher.getAuthTag().toString("base64url"),
+    ciphertext.toString("base64url"),
+  ].join(".");
+}
+
+function decryptTrackingToken(encryptedToken, idempotencyKey) {
+  const [encodedIv, encodedAuthTag, encodedCiphertext, extra] = encryptedToken.split(".");
+  if (!encodedIv || !encodedAuthTag || !encodedCiphertext || extra) {
+    throw new Error("No se pudo recuperar el resultado de la solicitud idempotente.");
+  }
+
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    getTrackingTokenEncryptionKey(idempotencyKey),
+    Buffer.from(encodedIv, "base64url"),
+  );
+  decipher.setAuthTag(Buffer.from(encodedAuthTag, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encodedCiphertext, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+
+function resultFromIdempotentOrder(order, requestHash, idempotencyKey) {
+  if (order.idempotency_request_hash !== requestHash) {
+    return {
+      error: "La clave de reintento ya se usó con una solicitud diferente.",
+      statusCode: 409,
+    };
+  }
+
+  return {
+    id: order.id,
+    status: order.status,
+    createdAt: order.created_at,
+    totalAmount: order.total_amount,
+    currency: order.currency,
+    trackingToken: decryptTrackingToken(order.tracking_token_encrypted, idempotencyKey),
+  };
 }
 
 function isValidPrice(value) {
@@ -141,7 +244,26 @@ export function importCatalogProducts(products) {
   return { importedCount: products.length };
 }
 
-export function createOrder(orderData) {
+export function createOrder(orderData, idempotencyKey) {
+  if (idempotencyKey !== undefined && idempotencyKey !== null &&
+    !isValidIdempotencyKey(idempotencyKey)) {
+    return { error: "La clave de reintento no es válida.", statusCode: 400 };
+  }
+
+  const idempotencyContext = idempotencyKey
+    ? createIdempotencyContext(orderData, idempotencyKey)
+    : null;
+  if (idempotencyContext) {
+    const existingOrder = selectIdempotentOrder(idempotencyContext.keyHash);
+    if (existingOrder) {
+      return resultFromIdempotentOrder(
+        existingOrder,
+        idempotencyContext.requestHash,
+        idempotencyKey,
+      );
+    }
+  }
+
   const requestedQuantities = new Map();
   for (const item of orderData.items) {
     if (item.id) {
@@ -189,8 +311,14 @@ export function createOrder(orderData) {
   const order = {
     id: randomUUID(),
     trackingTokenHash: createHash("sha256").update(trackingToken).digest("hex"),
+    idempotencyKeyHash: idempotencyContext?.keyHash,
+    idempotencyRequestHash: idempotencyContext?.requestHash,
+    trackingTokenEncrypted: idempotencyContext
+      ? encryptTrackingToken(trackingToken, idempotencyKey)
+      : null,
     realName: orderData.realName.trim(),
     gameNickname: orderData.gameNickname.trim(),
+    customerEmail: orderData.email.trim(),
     paymentMethod: orderData.paymentMethod,
     currency,
     totalAmount,
@@ -199,7 +327,14 @@ export function createOrder(orderData) {
   };
 
   try {
-    insertOrder(order);
+    const insertResult = insertOrder(order);
+    if (insertResult.existingOrder) {
+      return resultFromIdempotentOrder(
+        insertResult.existingOrder,
+        idempotencyContext.requestHash,
+        idempotencyKey,
+      );
+    }
   } catch (error) {
     if (error.statusCode === 409) {
       return { error: error.message, statusCode: 409 };
@@ -275,7 +410,7 @@ export function changeOrderStatus(id, status) {
   }
 
   const updatedAt = new Date().toISOString();
-  const { changes, stockError } = saveOrderStatus(
+  const { changes, stockError, notificationId } = saveOrderStatus(
     id,
     status,
     updatedAt,
@@ -288,7 +423,47 @@ export function changeOrderStatus(id, status) {
     return { error: "No se encontró el pedido.", statusCode: 404 };
   }
 
-  return { id, status, updatedAt };
+  return { id, status, updatedAt, notificationId };
+}
+
+export async function deliverOrderStatusNotification(notificationId) {
+  const notification = selectOrderStatusNotification(notificationId);
+  if (!notification) {
+    return { error: "No se encontró la notificación.", statusCode: 404 };
+  }
+  if (notification.delivery_status === "sent") {
+    return { id: notification.id, status: "sent" };
+  }
+  if (!config.smtp) {
+    return {
+      id: notification.id,
+      status: "pending",
+      message: "El correo está pendiente: configura SMTP para habilitar los envíos.",
+    };
+  }
+
+  recordOrderStatusNotificationAttempt(notification.id);
+  try {
+    const { sendStatusEmail } = await import("./smtp.service.js");
+    await sendStatusEmail({
+      recipient: notification.recipient_email,
+      orderId: notification.order_id,
+      status: notification.status,
+    });
+    markOrderStatusNotificationSent(notification.id, new Date().toISOString());
+    return { id: notification.id, status: "sent" };
+  } catch (error) {
+    console.error("No se pudo enviar la notificación del pedido:", error);
+    markOrderStatusNotificationFailed(
+      notification.id,
+      "No se pudo enviar el correo. Revisa la configuración y vuelve a intentarlo.",
+    );
+    return {
+      id: notification.id,
+      status: "failed",
+      message: "El estado cambió, pero no se pudo enviar el correo. Puedes reintentarlo.",
+    };
+  }
 }
 
 export function removeOrder(id) {

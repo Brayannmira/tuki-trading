@@ -25,3 +25,19 @@ export const loginRateLimit = rateLimit({
   legacyHeaders: false,
   message: { error: "Demasiados intentos de acceso. Inténtalo de nuevo más tarde." },
 });
+
+export const customerCodeRequestRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: config.isProduction ? 5 : 10,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Demasiadas solicitudes. Inténtalo de nuevo más tarde." },
+});
+
+export const customerCodeVerifyRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: config.isProduction ? 20 : 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Demasiados intentos. Inténtalo de nuevo más tarde." },
+});

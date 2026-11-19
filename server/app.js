@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { adminRouter } from "./routes/admin.routes.js";
 import { catalogRouter } from "./routes/catalog.routes.js";
+import { customerRouter } from "./routes/customer.routes.js";
 import { healthRouter } from "./routes/health.routes.js";
 import { ordersRouter } from "./routes/orders.routes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -19,6 +20,7 @@ export function createApp() {
   app.use("/api/health", healthRouter);
   app.use("/api/catalog", catalogRouter);
   app.use("/api/orders", ordersRouter);
+  app.use("/api/customer", customerRouter);
   app.use("/api/admin", adminRouter);
 
   if (config.isProduction) {
