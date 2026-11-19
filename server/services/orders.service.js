@@ -12,6 +12,8 @@ import {
   selectOrderStatusHistory,
   selectOrderStatus,
   selectOrdersPage,
+  selectAdminAuditLog,
+  countAdminAuditLog,
   updateOrderStatus as saveOrderStatus,
 } from "../repositories/orders.repository.js";
 
@@ -196,7 +198,14 @@ export function createOrder(orderData) {
     createdAt: new Date().toISOString(),
   };
 
-  insertOrder(order);
+  try {
+    insertOrder(order);
+  } catch (error) {
+    if (error.statusCode === 409) {
+      return { error: error.message, statusCode: 409 };
+    }
+    throw error;
+  }
 
   return {
     id: order.id,
@@ -290,4 +299,23 @@ export function removeOrder(id) {
   }
 
   return { id };
+}
+
+export function getAdminAuditLog({ page, limit }) {
+  const total = countAdminAuditLog();
+  const totalPages = Math.max(Math.ceil(total / limit), 1);
+  const currentPage = Math.min(page, totalPages);
+
+  return {
+    data: selectAdminAuditLog({
+      limit,
+      offset: (currentPage - 1) * limit,
+    }),
+    pagination: {
+      page: currentPage,
+      limit,
+      total,
+      totalPages,
+    },
+  };
 }

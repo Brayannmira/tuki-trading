@@ -14,6 +14,7 @@ import {
 import {
   deleteOrder,
   listOrders,
+  listAdminAudit,
   updateOrderStatus,
 } from "../controllers/orders.controller.js";
 import { requireAdmin, requireSameOrigin } from "../middleware/adminAuth.js";
@@ -36,3 +37,4 @@ adminRouter.get("/catalog", requireAdmin, listAdminCatalog);
 adminRouter.patch("/catalog/:id", requireAdmin, requireSameOrigin, updateCatalogItem);
 adminRouter.post("/catalog/import", requireAdmin, requireSameOrigin, importCatalogItems);
 adminRouter.post("/backup", requireAdmin, requireSameOrigin, downloadDatabaseBackup);
+adminRouter.get("/audit", requireAdmin, listAdminAudit);

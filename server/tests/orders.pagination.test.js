@@ -504,6 +504,96 @@ test("admin can download a consistent SQLite database backup", async () => {
   assert.equal(file.subarray(0, 15).toString(), "SQLite format 3");
 });
 
+test("admin audit route requires a session and lists recorded actions", async () => {
+  const unauthorized = await request("/api/admin/audit");
+  assert.equal(unauthorized.status, 401);
+
+  const response = await request("/api/admin/audit?limit=10", {
+    headers: { cookie: sessionCookie },
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.ok(Array.isArray(result.data));
+  assert.ok(result.pagination.total >= 1);
+  assert.ok(result.data.every((entry) =>
+    typeof entry.actor === "string" &&
+    typeof entry.action === "string" &&
+    typeof entry.entity_id === "string"
+  ));
+});
+
+test("stock is reserved atomically and deleting a completed order restores it", async () => {
+  const productId = "warframes:Concurrency Test";
+  const updateProduct = await request(
+    `/api/admin/catalog/${encodeURIComponent(productId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        cookie: sessionCookie,
+        origin: process.env.APP_ORIGIN,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: productId,
+        name: "Concurrency Test",
+        category: "Warframes",
+        priceCop: 1000,
+        pricePlatinum: 1,
+        stockQuantity: 1,
+        availability: "Disponible",
+      }),
+    },
+  );
+  assert.equal(updateProduct.status, 200);
+
+  const createRequests = Array.from({ length: 2 }, () =>
+    request("/api/orders", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        realName: "Concurrent Customer",
+        gameNickname: "ConcurrentPlayer",
+        paymentMethod: "Dinero (COP)",
+        items: [{ id: productId, name: "Concurrency Test", category: "Warframes", quantity: 1 }],
+      }),
+    }),
+  );
+  const responses = await Promise.all(createRequests);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
+
+  const successfulOrder = await (
+    await Promise.all(responses.map((response) =>
+      response.status === 201 ? response.json() : null,
+    ))
+  ).find((result) => result !== null);
+  const complete = await request(`/api/admin/orders/${successfulOrder.id}/status`, {
+    method: "PATCH",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ status: "Completado" }),
+  });
+  assert.equal(complete.status, 200);
+  assert.equal(
+    database.prepare("SELECT stock_quantity FROM catalog_products WHERE id = ?")
+      .get(productId).stock_quantity,
+    0,
+  );
+
+  const remove = await request(`/api/admin/orders/${successfulOrder.id}`, {
+    method: "DELETE",
+    headers: { cookie: sessionCookie, origin: process.env.APP_ORIGIN },
+  });
+  assert.equal(remove.status, 204);
+  assert.equal(
+    database.prepare("SELECT stock_quantity FROM catalog_products WHERE id = ?")
+      .get(productId).stock_quantity,
+    1,
+  );
+});
+
 test("admin can update and delete an order; invalid and missing updates fail", async () => {
   const invalidUpdate = await request(`/api/admin/orders/${createdOrder.id}/status`, {
     method: "PATCH",
@@ -658,6 +748,86 @@ test("admin can update and delete an order; invalid and missing updates fail", a
       .get(createdOrder.id).total,
     2,
   );
+});
+
+test("payment orders use the server snapshot and malformed JSON is rejected", async () => {
+  const malformed = await request("/api/orders", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{",
+  });
+  assert.equal(malformed.status, 400);
+  assert.equal((await malformed.json()).error, "El cuerpo de la solicitud no es JSON válido.");
+
+  const updateProduct = await request(
+    "/api/admin/catalog/unpriced-test",
+    {
+      method: "PATCH",
+      headers: {
+        cookie: sessionCookie,
+        origin: process.env.APP_ORIGIN,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: "unpriced-test",
+        name: "Unpriced Test",
+        category: "Test",
+        priceCop: null,
+        pricePlatinum: null,
+        stockQuantity: null,
+        availability: "Por confirmar",
+      }),
+    },
+  );
+  assert.equal(updateProduct.status, 200);
+
+  const pendingQuotation = await request("/api/orders", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: "Quotation Customer",
+      gameNickname: "QuotationPlayer",
+      paymentMethod: "Dinero (COP)",
+      items: [{
+        id: "unpriced-test",
+        name: "Unpriced Test",
+        category: "Test",
+        quantity: 1,
+      }],
+    }),
+  });
+  assert.equal(pendingQuotation.status, 201);
+  const quotation = await pendingQuotation.json();
+  assert.equal(quotation.totalAmount, null);
+  assert.equal(quotation.currency, "COP");
+});
+
+test("sqlite write failures roll back order creation and status changes", () => {
+  const beforeCount = database.prepare("SELECT COUNT(*) AS total FROM orders").get().total;
+  database.exec(`
+    CREATE TRIGGER reject_test_order_insert
+    BEFORE INSERT ON orders
+    BEGIN
+      SELECT RAISE(ABORT, 'sqlite unavailable');
+    END;
+  `);
+  try {
+    assert.throws(
+      () => insertOrder({
+        id: "sqlite-failure-order",
+        trackingTokenHash: "sqlite-failure-hash",
+        realName: "SQLite Failure",
+        gameNickname: "SQLitePlayer",
+        paymentMethod: "Platino",
+        items: [{ name: "Test Item", category: "Test", quantity: 1 }],
+        createdAt: new Date().toISOString(),
+      }),
+      /sqlite unavailable/,
+    );
+  } finally {
+    database.exec("DROP TRIGGER reject_test_order_insert");
+  }
+  assert.equal(database.prepare("SELECT COUNT(*) AS total FROM orders").get().total, beforeCount);
 });
 
 test("rejects state-changing requests from a different origin", async () => {

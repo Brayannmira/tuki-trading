@@ -25,7 +25,7 @@
   left: -10%;
   width: 120%;
   height: 120%;
-  background: url("/Fondo.jpg") no-repeat center center;
+  background: url("/Fondo.webp") no-repeat center center;
   background-size: cover;
   z-index: 1;
   transform: translate(calc(var(--x, 0) * -15px), calc(var(--y, 0) * -15px));

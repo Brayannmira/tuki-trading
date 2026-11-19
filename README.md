@@ -438,6 +438,18 @@ Para restaurar una copia local:
 
 No copies un respaldo encima de una base que el proceso tenga abierta. Para restauración en producción, sigue el procedimiento de mantenimiento del entorno y verifica también que el archivo restaurado tenga permisos adecuados.
 
+## Producción
+
+Para ejecutar el proyecto completo desde Express:
+
+```powershell
+npm.cmd run build
+$env:NODE_ENV="production"
+npm.cmd run start:server
+```
+
+Express sirve `dist/` y todas las rutas de React en producción. `/api` continúa siendo atendido por la API.
+
 ## Comandos npm
 
 | Comando | Uso |
@@ -447,6 +459,9 @@ No copies un respaldo encima de una base que el proceso tenga abierta. Para rest
 | `npm.cmd run server` | Inicia la API con reinicio al detectar cambios. |
 | `npm.cmd run start:server` | Inicia la API sin modo watch. |
 | `npm.cmd run test:server` | Ejecuta las pruebas de integración de la API. |
+| `npm.cmd run test:frontend` | Ejecuta las pruebas de componentes React con Vitest y Testing Library. |
+| `npm.cmd run test:e2e` | Ejecuta el flujo de pedido en Chromium de escritorio y móvil con Playwright. |
+| `npm.cmd test` | Ejecuta las pruebas del servidor y del frontend. |
 | `npm.cmd run lint` | Ejecuta ESLint sobre el proyecto. |
 | `npm.cmd run build` | Genera la compilación del frontend en `dist/`. |
 | `npm.cmd run preview` | Sirve localmente la compilación de Vite para revisarla. |

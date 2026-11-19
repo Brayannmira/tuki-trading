@@ -7,7 +7,7 @@ function Duviri() {
       style={{
         minHeight: "100vh",
         backgroundImage:
-          'linear-gradient(rgba(11, 15, 25, 0.65), rgba(11, 15, 25, 0.8)), url("/Pagina-informacion.jpg")',
+          'linear-gradient(rgba(11, 15, 25, 0.65), rgba(11, 15, 25, 0.8)), url("/Pagina-informacion.webp")',
         backgroundSize: "cover",
         backgroundPosition: "center",
         backgroundRepeat: "no-repeat",

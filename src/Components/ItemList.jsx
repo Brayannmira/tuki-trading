@@ -86,6 +86,9 @@ function ItemList({
   return (
     <div className={`category-section${hasImages ? ' warframes-section' : ''}`}>
       <h2>{title}</h2>
+      <p className="catalog-result-count" aria-live="polite">
+        {filteredItems.length} {filteredItems.length === 1 ? "resultado" : "resultados"}
+      </p>
       {filteredItems.length > 0 ? (
         <ul className="items-grid">
           {filteredItems.map((item) => {
@@ -239,7 +242,7 @@ function ItemList({
           })}
         </ul>
       ) : (
-        <p className="catalog-empty-state">
+        <p className="catalog-empty-state" role="status" aria-live="polite">
           No hay artículos que coincidan con los filtros seleccionados.
         </p>
       )}

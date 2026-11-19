@@ -71,7 +71,7 @@ function OrderStatusPage() {
             Ingresa el número de pedido y el código de seguimiento que recibiste al enviarlo.
           </p>
 
-          <form className="order-tracking-form" onSubmit={handleSubmit}>
+          <form className="order-tracking-form" onSubmit={handleSubmit} aria-busy={loading}>
             <label>
               Número de pedido
               <input
@@ -79,6 +79,7 @@ function OrderStatusPage() {
                 autoComplete="off"
                 value={orderId}
                 onChange={(event) => setOrderId(event.target.value)}
+                disabled={loading}
                 required
               />
             </label>
@@ -92,6 +93,7 @@ function OrderStatusPage() {
                 autoCapitalize="off"
                 value={trackingToken}
                 onChange={(event) => setTrackingToken(event.target.value)}
+                disabled={loading}
                 required
               />
             </label>

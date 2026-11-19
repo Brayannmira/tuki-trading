@@ -177,6 +177,8 @@ function AdminPage() {
   const [vaultOpening, setVaultOpening] = useState(false);
   const [backupLoading, setBackupLoading] = useState(false);
   const [orderStatusFilter, setOrderStatusFilter] = useState("Todos");
+  const [auditEntries, setAuditEntries] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
   const vaultCompletionStarted = useRef(false);
   const orderRequestId = useRef(0);
   const dashboardMetrics = useMemo(
@@ -208,6 +210,19 @@ function AdminPage() {
     }
   }, []);
 
+  const loadAudit = useCallback(async () => {
+    setAuditLoading(true);
+    try {
+      const response = await fetch("/api/admin/audit?limit=50", {
+        credentials: "same-origin",
+      });
+      const result = await readJsonResponse(response);
+      setAuditEntries(result.data);
+    } finally {
+      setAuditLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
 
@@ -217,6 +232,7 @@ function AdminPage() {
         if (!active || !session.authenticated) return;
         setAuthenticated(true);
         await loadOrders(1, "Todos");
+        await loadAudit();
       })
       .catch((requestError) => {
         if (active) setError(requestError.message);
@@ -229,7 +245,7 @@ function AdminPage() {
       active = false;
       orderRequestId.current += 1;
     };
-  }, [loadOrders]);
+  }, [loadOrders, loadAudit]);
 
   const completeVaultOpening = () => {
     if (vaultCompletionStarted.current) return;
@@ -239,6 +255,7 @@ function AdminPage() {
     setVaultOpening(false);
     loadOrders(page, orderStatusFilter)
       .catch((requestError) => setError(requestError.message));
+    loadAudit().catch((requestError) => setError(requestError.message));
   };
 
   const handleLogin = async (event) => {
@@ -671,6 +688,55 @@ function AdminPage() {
       </section>
 
       <CatalogAdminPanel />
+
+      <section className="admin-audit-card" aria-labelledby="admin-audit-title">
+        <div className="admin-orders-heading">
+          <div>
+            <h2 id="admin-audit-title">Registro de auditoría</h2>
+            <p>Últimas acciones administrativas sobre pedidos.</p>
+          </div>
+          <button
+            type="button"
+            className="admin-secondary-button"
+            onClick={() => loadAudit().catch((requestError) => setError(requestError.message))}
+            disabled={auditLoading}
+          >
+            {auditLoading ? "Actualizando..." : "Actualizar registro"}
+          </button>
+        </div>
+        {auditEntries.length === 0 ? (
+          <p className="admin-empty">
+            {auditLoading ? "Cargando registro..." : "Todavía no hay acciones registradas."}
+          </p>
+        ) : (
+          <ul className="admin-audit-list">
+            {auditEntries.map((entry) => {
+              let details;
+              try {
+                details = entry.details ? JSON.parse(entry.details) : null;
+              } catch {
+                details = null;
+              }
+              return (
+                <li key={entry.id}>
+                  <strong>{entry.actor}</strong>
+                  <span>
+                    {entry.action === "order.status_changed"
+                      ? ` cambió el pedido ${entry.entity_id}: ${details?.from ?? "?"} → ${details?.to ?? "?"}`
+                      : ` eliminó el pedido ${entry.entity_id}`}
+                  </span>
+                  <time dateTime={entry.created_at}>
+                    {new Intl.DateTimeFormat("es-CO", {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(entry.created_at))}
+                  </time>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
       <section className="admin-orders admin-orders-section">
         <div className="admin-orders-heading">

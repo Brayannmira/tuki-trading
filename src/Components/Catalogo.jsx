@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import SearchBar from "./SearchBar";
+import "../Catalog.css";
+import CatalogFilters from "./CatalogFilters.jsx";
 import ItemList from "./ItemList";
 import warframes from "../Services/Warframes.js";
 import primarias from "../Services/Primarias.js";
 import secundarias from "../Services/secundarias.js";
 import meles from "../Services/mele.js";
-import platinumOfferImage from "../../imagenes-warframe/Oferta platinum.jpg";
-import package1Image from "../../imagenes-warframe/Paquete 1.jpg";
-import package2Image from "../../imagenes-warframe/Paquete 2.jpg";
-import package3Image from "../../imagenes-warframe/paquete 3.jpg";
 import secondaryCategoryImage from "../../imagenes-warframe/secundarias/Lex Prime.png";
 import meleeCategoryImage from "../../imagenes-warframe/Melee/Nikana Prime.png";
 import { useSelection } from "./SelectionContext.js";
+
+const platinumOfferImage = "/Oferta-platinum.webp";
+const package1Image = "/Paquete-1.webp";
+const package2Image = "/Paquete-2.webp";
+const package3Image = "/Paquete-3.webp";
 
 const platinumPackages = [
   { id: "platino:100 platinos", name: "100 platinos", image: package1Image, priceCop: 12000 },
@@ -51,7 +53,7 @@ const categories = [
     subtitle: "Rifles",
     rareza: "Poco Común",
     estado: "En Bóveda",
-    image: "/images.jpg",
+    image: "/images.webp",
     destacado: true,
   },
   {
@@ -74,15 +76,6 @@ const categories = [
   },
 ];
 
-const rarities = ["Común", "Poco Común", "Raro", "Legendario"];
-const statuses = [
-  "Disponible",
-  "En Bóveda",
-  "Oferta Especial",
-  "Agotado",
-  "Por confirmar",
-];
-
 function Catalog() {
   const [searchTerm, setSearchTerm] = useState("");
   const [activeCategory, setActiveCategory] = useState("warframes");
@@ -92,6 +85,7 @@ function Catalog() {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [sortBy, setSortBy] = useState("name");
   const [catalogProducts, setCatalogProducts] = useState([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState("");
   const { selectedItems, toggleItem } = useSelection();
 
@@ -111,6 +105,9 @@ function Catalog() {
       })
       .catch((requestError) => {
         if (requestError.name !== "AbortError") setCatalogError(requestError.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCatalogLoading(false);
       });
 
     return () => controller.abort();
@@ -148,14 +145,6 @@ function Catalog() {
     (item) => (productsById[`${activeCategory}:${item.name}`]?.popularity ?? 0) > 0,
   );
 
-  const toggleFilter = (value, activeValues, setActiveValues) => {
-    setActiveValues((currentValues) =>
-      currentValues.includes(value)
-        ? currentValues.filter((currentValue) => currentValue !== value)
-        : [...currentValues, value],
-    );
-  };
-
   return (
     <div className="catalog-page">
       <div className="catalog-hero">
@@ -173,6 +162,7 @@ function Catalog() {
             key={category.id}
             className={`catalog-card ${category.id} ${activeCategory === category.id ? "active" : ""}`}
             onClick={() => setActiveCategory(category.id)}
+            aria-pressed={activeCategory === category.id}
           >
             <img
               className="catalog-card-image"
@@ -196,82 +186,22 @@ function Catalog() {
       <div className="catalog-layout">
         <aside className="catalog-sidebar">
           {activeCategory !== "platino" && (
-            <>
-              <SearchBar searchTerm={searchTerm} setSearchTerm={setSearchTerm} />
-              <section className="catalog-filter-panel">
-                <h2>Filtros y selección</h2>
-
-                <fieldset className="catalog-filter-group">
-                  <legend>Filtrar por rareza</legend>
-                  {rarities.map((rarity) => (
-                    <label className="catalog-filter-option" key={rarity}>
-                      <input
-                        type="checkbox"
-                        checked={activeRarities.includes(rarity)}
-                        onChange={() =>
-                          toggleFilter(rarity, activeRarities, setActiveRarities)
-                        }
-                      />
-                      <span>{rarity}</span>
-                    </label>
-                  ))}
-                </fieldset>
-
-                <fieldset className="catalog-filter-group">
-                  <legend>Filtrar por estado</legend>
-                  {statuses.map((status) => (
-                    <label className="catalog-filter-option" key={status}>
-                      <input
-                        type="checkbox"
-                        checked={activeStatuses.includes(status)}
-                        onChange={() =>
-                          toggleFilter(status, activeStatuses, setActiveStatuses)
-                        }
-                      />
-                      <span>{status}</span>
-                    </label>
-                  ))}
-                </fieldset>
-
-                <label className="catalog-sort-control">
-                  <span>Filtrar por tipo</span>
-                  <select value={activeType} onChange={(event) => setActiveType(event.target.value)}>
-                    <option value="Todos">Todos los tipos</option>
-                    <option value="Prime">Prime</option>
-                    <option value="Plano Principal">Plano principal</option>
-                    <option value="Componente">Componente</option>
-                  </select>
-                </label>
-
-                <label className="catalog-filter-option catalog-favorites-filter">
-                  <input
-                    type="checkbox"
-                    checked={favoritesOnly}
-                    onChange={(event) => setFavoritesOnly(event.target.checked)}
-                  />
-                  <span>Mostrar solo favoritos</span>
-                </label>
-
-                <label className="catalog-sort-control">
-                  <span>Ordenar por</span>
-                  <select value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                    <option value="name">Nombre</option>
-                    <option value="price" disabled={!hasCatalogPrices}>Precio</option>
-                    <option value="popularity" disabled={!hasCatalogPopularity}>Popularidad</option>
-                  </select>
-                </label>
-                {!hasCatalogPrices && (
-                  <p className="catalog-sort-note">
-                    El orden por precio se habilitará al cargar la lista real que compartirás.
-                  </p>
-                )}
-                {!hasCatalogPopularity && (
-                  <p className="catalog-sort-note">
-                    La popularidad se calcula con las cantidades de pedidos completados.
-                  </p>
-                )}
-              </section>
-            </>
+            <CatalogFilters
+              searchTerm={searchTerm}
+              setSearchTerm={setSearchTerm}
+              activeRarities={activeRarities}
+              setActiveRarities={setActiveRarities}
+              activeStatuses={activeStatuses}
+              setActiveStatuses={setActiveStatuses}
+              activeType={activeType}
+              setActiveType={setActiveType}
+              favoritesOnly={favoritesOnly}
+              setFavoritesOnly={setFavoritesOnly}
+              sortBy={sortBy}
+              setSortBy={setSortBy}
+              hasCatalogPrices={hasCatalogPrices}
+              hasCatalogPopularity={hasCatalogPopularity}
+            />
           )}
 
           <section className="catalog-selection-summary">
@@ -288,6 +218,11 @@ function Catalog() {
 
         <main className="catalog-results">
           {catalogError && <p className="catalog-data-error" role="alert">{catalogError}</p>}
+          {catalogLoading && (
+            <p className="catalog-loading" role="status" aria-live="polite">
+              Cargando precios y disponibilidad…
+            </p>
+          )}
           {activeCategory === "platino" ? (
             <div className="catalog-platinum-panel category-section">
               <h2>Paquetes de Platino</h2>
@@ -337,18 +272,20 @@ function Catalog() {
               </div>
             </div>
           ) : (
-            <ItemList
-              items={activeItems}
-              title={activeTitle}
-              searchTerm={searchTerm}
-              categoryId={activeCategory}
-              rarezasActivas={activeRarities}
-              estadosActivos={activeStatuses}
-              tipoActivo={activeType}
-              soloFavoritos={favoritesOnly}
-              catalogProducts={productsById}
-              ordenarPor={sortBy}
-            />
+            <div aria-busy={catalogLoading}>
+              <ItemList
+                items={activeItems}
+                title={activeTitle}
+                searchTerm={searchTerm}
+                categoryId={activeCategory}
+                rarezasActivas={activeRarities}
+                estadosActivos={activeStatuses}
+                tipoActivo={activeType}
+                soloFavoritos={favoritesOnly}
+                catalogProducts={productsById}
+                ordenarPor={sortBy}
+              />
+            </div>
           )}
         </main>
       </div>

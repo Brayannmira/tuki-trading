@@ -6,6 +6,7 @@ import {
   isValidOrder,
   orderStatuses,
   removeOrder,
+  getAdminAuditLog,
 } from "../services/orders.service.js";
 
 const defaultPage = 1;
@@ -88,4 +89,21 @@ export function deleteOrder(request, response) {
   }
 
   return response.status(204).end();
+}
+
+export function listAdminAudit(request, response) {
+  const page = request.query.page === undefined
+    ? defaultPage
+    : parsePositiveInteger(request.query.page);
+  const limit = request.query.limit === undefined
+    ? defaultLimit
+    : parsePositiveInteger(request.query.limit);
+
+  if (page === null || limit === null || limit > maxLimit) {
+    return response.status(400).json({
+      error: "Usa page y limit como enteros positivos (limit máximo 50).",
+    });
+  }
+
+  return response.json(getAdminAuditLog({ page, limit }));
 }

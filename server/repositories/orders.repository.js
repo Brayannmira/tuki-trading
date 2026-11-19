@@ -16,6 +16,35 @@ export function insertOrder(order) {
 
   database.exec("BEGIN");
   try {
+    const quantitiesByProduct = new Map();
+    for (const item of order.items) {
+      if (!item.productId) continue;
+      quantitiesByProduct.set(
+        item.productId,
+        (quantitiesByProduct.get(item.productId) ?? 0) + item.quantity,
+      );
+    }
+
+    for (const [productId, quantity] of quantitiesByProduct) {
+      const product = selectCatalogProduct(productId);
+      if (
+        product &&
+        (product.availability === "Agotado" ||
+          (product.stock_quantity !== null &&
+            quantity + database.prepare(`
+              SELECT COALESCE(SUM(order_item.quantity), 0) AS quantity
+              FROM order_items AS order_item
+              JOIN orders AS order_record ON order_record.id = order_item.order_id
+              WHERE order_item.product_id = ?
+                AND order_record.status IN ('Pendiente', 'En proceso')
+            `).get(productId).quantity > product.stock_quantity))
+      ) {
+        const error = new Error(`${product.name} no tiene existencias suficientes.`);
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+
     insertOrderStatement.run(
       order.id,
       order.trackingTokenHash,
@@ -322,6 +351,41 @@ export function updateOrderStatus(id, status, updatedAt, actor) {
 export function deleteOrder(id, actor) {
   database.exec("BEGIN");
   try {
+    const order = database.prepare("SELECT status FROM orders WHERE id = ?").get(id);
+    if (!order) {
+      database.exec("COMMIT");
+      return 0;
+    }
+
+    if (order.status === "Completado") {
+      const orderItems = database.prepare(`
+        SELECT product_id, name, quantity
+        FROM order_items
+        WHERE order_id = ? AND product_id IS NOT NULL
+      `).all(id);
+      const quantitiesByProduct = new Map();
+      for (const item of orderItems) {
+        quantitiesByProduct.set(
+          item.product_id,
+          (quantitiesByProduct.get(item.product_id) ?? 0) + item.quantity,
+        );
+      }
+
+      for (const [productId, quantity] of quantitiesByProduct) {
+        const product = selectCatalogProduct(productId);
+        if (product?.stock_quantity === null || product?.stock_quantity === undefined) continue;
+
+        const nextQuantity = product.stock_quantity + quantity;
+        const nextAvailability =
+          product.availability === "Agotado" ? "Disponible" : product.availability;
+        database.prepare(`
+          UPDATE catalog_products
+          SET stock_quantity = ?, availability = ?, updated_at = ?
+          WHERE id = ?
+        `).run(nextQuantity, nextAvailability, new Date().toISOString(), productId);
+      }
+    }
+
     const result = database
       .prepare("DELETE FROM orders WHERE id = ?")
       .run(id);
@@ -339,4 +403,17 @@ export function deleteOrder(id, actor) {
     database.exec("ROLLBACK");
     throw error;
   }
+}
+
+export function selectAdminAuditLog({ limit = 50, offset = 0 } = {}) {
+  return database.prepare(`
+    SELECT id, actor, action, entity_id, details, created_at
+    FROM admin_audit_log
+    ORDER BY created_at DESC, id DESC
+    LIMIT ? OFFSET ?
+  `).all(limit, offset);
+}
+
+export function countAdminAuditLog() {
+  return database.prepare("SELECT COUNT(*) AS total FROM admin_audit_log").get().total;
 }

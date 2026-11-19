@@ -102,7 +102,7 @@ function Formulario() {
       <h2>Formulario de solicitud</h2>
       <p>Completa tus datos y confirma los artículos que quieres solicitar.</p>
 
-      <form className="trade-form" onSubmit={handleSubmit}>
+      <form className="trade-form" onSubmit={handleSubmit} aria-busy={isSubmitting}>
         <div className="trade-form-fields">
           <label>
             <span>Nombre real</span>
@@ -112,6 +112,7 @@ function Formulario() {
               maxLength={100}
               value={realName}
               onChange={(event) => setRealName(event.target.value)}
+              disabled={isSubmitting}
               required
             />
           </label>
@@ -123,6 +124,7 @@ function Formulario() {
               maxLength={100}
               value={gameNickname}
               onChange={(event) => setGameNickname(event.target.value)}
+              disabled={isSubmitting}
               required
             />
           </label>
@@ -138,6 +140,7 @@ function Formulario() {
                 value={method}
                 checked={paymentMethod === method}
                 onChange={(event) => setPaymentMethod(event.target.value)}
+                disabled={isSubmitting}
               />
               <span>{method}</span>
             </label>
@@ -170,9 +173,12 @@ function Formulario() {
                       max="99"
                       value={item.quantity ?? 1}
                       onChange={(event) => updateQuantity(item.id, event.target.value)}
+                      disabled={isSubmitting}
                     />
                   </label>
-                  <button type="button" onClick={() => toggleItem(item)}>Quitar</button>
+                  <button type="button" onClick={() => toggleItem(item)} disabled={isSubmitting}>
+                    Quitar
+                  </button>
                 </li>
               ))}
             </ul>
@@ -198,9 +204,9 @@ function Formulario() {
           {isSubmitting ? "Enviando solicitud..." : "Enviar solicitud"}
         </button>
         {submissionError && <p className="trade-form-error" role="alert">{submissionError}</p>}
-        {catalogError && <p className="trade-form-note" role="status">{catalogError}</p>}
+        {catalogError && <p className="trade-form-error" role="alert">{catalogError}</p>}
         {createdOrderId ? (
-          <div className="trade-form-success" role="status">
+          <div className="trade-form-success" role="status" aria-live="polite">
             <p>
               Solicitud recibida. Número de pedido: <strong>{createdOrderId}</strong>
             </p>
