@@ -26,7 +26,12 @@ export function createOrder(request, response) {
     return response.status(400).json({ error: "Revisa los datos y artículos de la solicitud." });
   }
 
-  response.status(201).json(saveOrder(orderData));
+  const result = saveOrder(orderData);
+  if (result.error) {
+    return response.status(result.statusCode).json({ error: result.error });
+  }
+
+  return response.status(201).json(result);
 }
 
 export function listOrders(request, response) {

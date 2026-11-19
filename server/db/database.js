@@ -17,14 +17,38 @@ database.exec(`
     payment_method TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'Pendiente'
       CHECK (status IN ('Pendiente', 'En proceso', 'Completado', 'Cancelado')),
+    total_amount INTEGER CHECK (total_amount IS NULL OR total_amount >= 0),
+    currency TEXT CHECK (currency IS NULL OR currency IN ('COP', 'Platino')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS order_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    product_id TEXT,
     name TEXT NOT NULL,
-    category TEXT NOT NULL
+    category TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity BETWEEN 1 AND 99),
+    unit_price_cop INTEGER CHECK (unit_price_cop IS NULL OR unit_price_cop >= 0),
+    unit_price_platinum INTEGER CHECK (unit_price_platinum IS NULL OR unit_price_platinum >= 0)
+  );
+  CREATE TABLE IF NOT EXISTS catalog_products (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    price_cop INTEGER CHECK (price_cop IS NULL OR price_cop >= 0),
+    price_platinum INTEGER CHECK (price_platinum IS NULL OR price_platinum >= 0),
+    stock_quantity INTEGER CHECK (stock_quantity IS NULL OR stock_quantity >= 0),
+    availability TEXT NOT NULL DEFAULT 'Por confirmar'
+      CHECK (availability IN ('Disponible', 'En Bóveda', 'Oferta Especial', 'Agotado', 'Por confirmar')),
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS order_status_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    status TEXT NOT NULL
+      CHECK (status IN ('Pendiente', 'En proceso', 'Completado', 'Cancelado')),
+    changed_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS admin_credentials (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -42,11 +66,57 @@ database.exec(`
   );
   CREATE INDEX IF NOT EXISTS admin_audit_log_entity_created
     ON admin_audit_log (entity_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS order_status_history_order_created
+      ON order_status_history (order_id, changed_at);
 `);
 
 const orderColumns = database.prepare("PRAGMA table_info(orders)").all();
 if (!orderColumns.some((column) => column.name === "tracking_token_hash")) {
   database.exec("ALTER TABLE orders ADD COLUMN tracking_token_hash TEXT");
 }
+  if (!orderColumns.some((column) => column.name === "total_amount")) {
+    database.exec("ALTER TABLE orders ADD COLUMN total_amount INTEGER");
+  }
+  if (!orderColumns.some((column) => column.name === "currency")) {
+    database.exec("ALTER TABLE orders ADD COLUMN currency TEXT");
+  }
+
+  const orderItemColumns = database.prepare("PRAGMA table_info(order_items)").all();
+  const orderItemMigrations = [
+    ["product_id", "TEXT"],
+    ["quantity", "INTEGER NOT NULL DEFAULT 1"],
+    ["unit_price_cop", "INTEGER"],
+    ["unit_price_platinum", "INTEGER"],
+  ];
+  for (const [columnName, columnDefinition] of orderItemMigrations) {
+    if (!orderItemColumns.some((column) => column.name === columnName)) {
+      database.exec(`ALTER TABLE order_items ADD COLUMN ${columnName} ${columnDefinition}`);
+    }
+  }
+  database.exec("CREATE INDEX IF NOT EXISTS order_items_product_id ON order_items (product_id)");
+  database.exec(`
+    INSERT INTO order_status_history (order_id, status, changed_at)
+    SELECT orders.id, orders.status, orders.updated_at
+    FROM orders
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM order_status_history
+      WHERE order_status_history.order_id = orders.id
+    )
+  `);
+
+  const platinumPackages = [
+    ["platino:100 platinos", "100 platinos", 12000],
+    ["platino:250 platinos", "250 platinos", 22000],
+    ["platino:600 platinos", "600 platinos", 50000],
+  ];
+  const insertPackage = database.prepare(`
+    INSERT OR IGNORE INTO catalog_products (
+      id, name, category, price_cop, price_platinum, stock_quantity, availability, updated_at
+    ) VALUES (?, ?, 'Platino', ?, NULL, NULL, 'Disponible', ?)
+  `);
+  for (const [id, name, priceCop] of platinumPackages) {
+    insertPackage.run(id, name, priceCop, new Date().toISOString());
+  }
 
 export default database;

@@ -11,6 +11,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   CheckCircle2,
   Clock,
+  Download,
   Lock,
   Package,
   RefreshCw,
@@ -21,6 +22,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import CatalogAdminPanel from "./CatalogAdminPanel.jsx";
 
 const AdminOrdersChart = lazy(() => import("./AdminOrdersChart.jsx"));
 
@@ -173,6 +175,7 @@ function AdminPage() {
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [deletingOrderId, setDeletingOrderId] = useState("");
   const [vaultOpening, setVaultOpening] = useState(false);
+  const [backupLoading, setBackupLoading] = useState(false);
   const [orderStatusFilter, setOrderStatusFilter] = useState("Todos");
   const vaultCompletionStarted = useRef(false);
   const orderRequestId = useRef(0);
@@ -329,6 +332,39 @@ function AdminPage() {
       setLoadingOrders(false);
     } catch (requestError) {
       setError(requestError.message);
+    }
+  };
+
+  const downloadBackup = async () => {
+    setError("");
+    setNotice("");
+    setBackupLoading(true);
+    try {
+      const response = await fetch("/api/admin/backup", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        await readJsonResponse(response);
+        throw new Error("No se pudo crear el respaldo.");
+      }
+
+      const backupBlob = await response.blob();
+      const fileName = response.headers.get("content-disposition")
+        ?.match(/filename="?([^";]+)"?/)?.[1] ?? "tuki-trading-backup.sqlite";
+      const downloadUrl = URL.createObjectURL(backupBlob);
+      const downloadLink = document.createElement("a");
+      downloadLink.href = downloadUrl;
+      downloadLink.download = fileName;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+      setNotice("Respaldo de la base de datos descargado.");
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBackupLoading(false);
     }
   };
 
@@ -506,6 +542,15 @@ function AdminPage() {
             <ShieldCheck size={15} aria-hidden="true" />
             Acceso administrador
           </span>
+          <button
+            type="button"
+            className="admin-secondary-button"
+            onClick={downloadBackup}
+            disabled={backupLoading}
+          >
+            <Download size={15} aria-hidden="true" />
+            {backupLoading ? "Creando respaldo..." : "Descargar respaldo"}
+          </button>
           <button type="button" className="admin-secondary-button" onClick={handleLogout}>
             Cerrar sesión
           </button>
@@ -625,6 +670,8 @@ function AdminPage() {
         </form>
       </section>
 
+      <CatalogAdminPanel />
+
       <section className="admin-orders admin-orders-section">
         <div className="admin-orders-heading">
           <div>
@@ -705,11 +752,19 @@ function AdminPage() {
                       </span>
                       <span className="admin-order-item-copy">
                         <strong>{item.name}</strong>
-                        <small>{item.category}</small>
+                        <small>{item.category} · Cantidad: {item.quantity ?? 1}</small>
                       </span>
                     </li>
                   ))}
                 </ul>
+                <p className="admin-order-total">
+                  Total:{" "}
+                  {order.totalAmount === null || order.totalAmount === undefined
+                    ? "Pendiente por cotizar"
+                    : order.currency === "COP"
+                      ? `$${new Intl.NumberFormat("es-CO").format(order.totalAmount)} COP`
+                      : `${new Intl.NumberFormat("es-CO").format(order.totalAmount)} platinos`}
+                </p>
                 <footer className="admin-order-footer">
                   <label className="admin-status-label">
                     <span>Estado del pedido</span>

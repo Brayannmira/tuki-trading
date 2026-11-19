@@ -18,6 +18,11 @@ function OrderStatusPage() {
   const [orderStatus, setOrderStatus] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const statusHistory = orderStatus?.history?.length
+    ? orderStatus.history
+    : orderStatus
+      ? [{ status: orderStatus.status, changedAt: orderStatus.updatedAt }]
+      : [];
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -111,6 +116,21 @@ function OrderStatusPage() {
                   <dd>{formatDate(orderStatus.updatedAt)}</dd>
                 </div>
               </dl>
+              <h3>Historial del pedido</h3>
+              <ol className="order-status-timeline">
+                {statusHistory.map((entry, index) => (
+                  <li
+                    className={index === statusHistory.length - 1 ? "current" : ""}
+                    key={`${entry.status}-${entry.changedAt}`}
+                  >
+                    <span className="order-status-timeline-marker" aria-hidden="true" />
+                    <span>
+                      <strong>{entry.status}</strong>
+                      <time dateTime={entry.changedAt}>{formatDate(entry.changedAt)}</time>
+                    </span>
+                  </li>
+                ))}
+              </ol>
             </section>
           )}
 

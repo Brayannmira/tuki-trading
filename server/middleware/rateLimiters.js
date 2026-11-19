@@ -1,4 +1,5 @@
 import { rateLimit } from "express-rate-limit";
+import { config } from "../config/env.js";
 
 export const orderRateLimit = rateLimit({
   windowMs: 10 * 60 * 1000,
@@ -19,7 +20,8 @@ export const orderStatusRateLimit = rateLimit({
 
 export const loginRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: config.isProduction ? 5 : 10,
   standardHeaders: "draft-8",
   legacyHeaders: false,
+  message: { error: "Demasiados intentos de acceso. Inténtalo de nuevo más tarde." },
 });

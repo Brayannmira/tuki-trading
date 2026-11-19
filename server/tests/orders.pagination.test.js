@@ -32,6 +32,7 @@ const statuses = ["Pendiente", "En proceso", "Completado", "Cancelado"];
 let server;
 let baseUrl;
 let createdOrder;
+let pricedOrder;
 let sessionCookie;
 let currentAdminPassword = process.env.ADMIN_PASSWORD;
 
@@ -253,6 +254,254 @@ test("admin login issues a session cookie and rejects incorrect credentials", as
 
   const unauthorizedList = await requestOrders("", false);
   assert.equal(unauthorizedList.status, 401);
+});
+
+test("admin manages catalog prices and an order snapshots totals and status history", async () => {
+  const productId = "warframes:Test Prime";
+  const updateProduct = await request(
+    `/api/admin/catalog/${encodeURIComponent(productId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        cookie: sessionCookie,
+        origin: process.env.APP_ORIGIN,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: productId,
+        name: "Test Prime",
+        category: "Warframes",
+        priceCop: 12000,
+        pricePlatinum: 20,
+        stockQuantity: 3,
+        availability: "Disponible",
+      }),
+    },
+  );
+  assert.equal(updateProduct.status, 200);
+
+  const publicCatalog = await request("/api/catalog");
+  const products = await publicCatalog.json();
+  const savedProduct = products.find((product) => product.id === productId);
+  assert.equal(publicCatalog.status, 200);
+  assert.equal(savedProduct.priceCop, 12000);
+  assert.equal(savedProduct.stockQuantity, 3);
+
+  const createPricedOrder = await request("/api/orders", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: "Catalog Customer",
+      gameNickname: "CatalogPlayer",
+      paymentMethod: "Dinero (COP)",
+      items: [{
+        id: productId,
+        name: "Test Prime",
+        category: "Warframes",
+        quantity: 2,
+      }],
+    }),
+  });
+  pricedOrder = await createPricedOrder.json();
+  assert.equal(createPricedOrder.status, 201);
+  assert.equal(pricedOrder.totalAmount, 24000);
+  assert.equal(pricedOrder.currency, "COP");
+
+  const orderItem = database.prepare(`
+    SELECT product_id, quantity, unit_price_cop
+    FROM order_items
+    WHERE order_id = ?
+  `).get(pricedOrder.id);
+  assert.deepEqual({ ...orderItem }, {
+    product_id: productId,
+    quantity: 2,
+    unit_price_cop: 12000,
+  });
+
+  for (const status of ["En proceso", "Completado"]) {
+    const updateStatus = await request(`/api/admin/orders/${pricedOrder.id}/status`, {
+      method: "PATCH",
+      headers: {
+        cookie: sessionCookie,
+        origin: process.env.APP_ORIGIN,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ status }),
+    });
+    assert.equal(updateStatus.status, 200);
+  }
+
+  const trackedOrder = await request(`/api/orders/${pricedOrder.id}/status`, {
+    headers: { authorization: `Bearer ${pricedOrder.trackingToken}` },
+  });
+  const trackingDetails = await trackedOrder.json();
+  assert.deepEqual(trackingDetails.history.map((entry) => entry.status), [
+    "Pendiente",
+    "En proceso",
+    "Completado",
+  ]);
+  assert.equal(savedProduct.popularity, 0);
+
+  const updatedProducts = await (await request("/api/catalog")).json();
+  const completedProduct = updatedProducts.find((product) => product.id === productId);
+  assert.equal(completedProduct.popularity, 2);
+  assert.equal(completedProduct.stockQuantity, 1);
+
+  const overStockOrder = await request("/api/orders", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: "Catalog Customer",
+      gameNickname: "CatalogPlayer",
+      paymentMethod: "Dinero (COP)",
+      items: [{
+        id: productId,
+        name: "Test Prime",
+        category: "Warframes",
+        quantity: 4,
+      }],
+    }),
+  });
+  assert.equal(overStockOrder.status, 409);
+
+  const reopenOrder = await request(`/api/admin/orders/${pricedOrder.id}/status`, {
+    method: "PATCH",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ status: "Cancelado" }),
+  });
+  assert.equal(reopenOrder.status, 200);
+  const restoredProducts = await (await request("/api/catalog")).json();
+  const restoredProduct = restoredProducts.find((product) => product.id === productId);
+  assert.equal(restoredProduct.stockQuantity, 3);
+  assert.equal(restoredProduct.popularity, 0);
+
+  const pendingOrder = await request("/api/orders", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      realName: "Catalog Customer",
+      gameNickname: "CatalogPlayer",
+      paymentMethod: "Dinero (COP)",
+      items: [{
+        id: productId,
+        name: "Test Prime",
+        category: "Warframes",
+        quantity: 2,
+      }],
+    }),
+  });
+  const pendingOrderDetails = await pendingOrder.json();
+  assert.equal(pendingOrder.status, 201);
+
+  const reduceStock = await request(
+    `/api/admin/catalog/${encodeURIComponent(productId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        cookie: sessionCookie,
+        origin: process.env.APP_ORIGIN,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: productId,
+        name: "Test Prime",
+        category: "Warframes",
+        priceCop: 12000,
+        pricePlatinum: 20,
+        stockQuantity: 1,
+        availability: "Disponible",
+      }),
+    },
+  );
+  assert.equal(reduceStock.status, 200);
+
+  const cannotComplete = await request(
+    `/api/admin/orders/${pendingOrderDetails.id}/status`,
+    {
+      method: "PATCH",
+      headers: {
+        cookie: sessionCookie,
+        origin: process.env.APP_ORIGIN,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ status: "Completado" }),
+    },
+  );
+  assert.equal(cannotComplete.status, 409);
+  assert.equal(database.prepare("SELECT status FROM orders WHERE id = ?")
+    .get(pendingOrderDetails.id).status, "Pendiente");
+  assert.equal(database.prepare("SELECT stock_quantity FROM catalog_products WHERE id = ?")
+    .get(productId).stock_quantity, 1);
+});
+
+test("admin imports catalog prices and rejects invalid import batches", async () => {
+  const imported = await request("/api/admin/catalog/import", {
+    method: "POST",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      products: [{
+        id: "mele:Imported Item",
+        name: "Imported Item",
+        category: "Armas Melé",
+        priceCop: 5000,
+        pricePlatinum: null,
+        stockQuantity: 2,
+        availability: "Disponible",
+      }],
+    }),
+  });
+  assert.equal(imported.status, 200);
+  assert.equal((await imported.json()).importedCount, 1);
+  assert.equal(
+    database.prepare("SELECT price_cop FROM catalog_products WHERE id = ?")
+      .get("mele:Imported Item").price_cop,
+    5000,
+  );
+
+  const invalid = await request("/api/admin/catalog/import", {
+    method: "POST",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      products: [{
+        id: "mele:Invalid Item",
+        name: "Invalid Item",
+        category: "Armas Melé",
+        priceCop: -1,
+        pricePlatinum: null,
+        stockQuantity: 0,
+        availability: "Desconocido",
+      }],
+    }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.equal(
+    database.prepare("SELECT COUNT(*) AS total FROM catalog_products WHERE id = ?")
+      .get("mele:Invalid Item").total,
+    0,
+  );
+});
+
+test("admin can download a consistent SQLite database backup", async () => {
+  const response = await request("/api/admin/backup", {
+    method: "POST",
+    headers: { cookie: sessionCookie, origin: process.env.APP_ORIGIN },
+  });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-disposition"), /tuki-trading-.*\.sqlite/);
+  const file = Buffer.from(await response.arrayBuffer());
+  assert.equal(file.subarray(0, 15).toString(), "SQLite format 3");
 });
 
 test("admin can update and delete an order; invalid and missing updates fail", async () => {
