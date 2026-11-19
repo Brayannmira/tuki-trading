@@ -15,7 +15,7 @@ export function listAdminCatalog(_request, response) {
 export function updateCatalogItem(request, response) {
   const productId = request.params.id;
   const product = request.body ?? {};
-  const updatedProduct = updateCatalogProduct(productId, product);
+  const updatedProduct = updateCatalogProduct(productId, product, request.admin.username);
 
   if (updatedProduct.error) {
     return response.status(updatedProduct.statusCode).json({ error: updatedProduct.error });
@@ -25,7 +25,7 @@ export function updateCatalogItem(request, response) {
 }
 
 export function importCatalogItems(request, response) {
-  const result = importCatalogProducts(request.body?.products);
+  const result = importCatalogProducts(request.body?.products, request.admin.username);
   if (result.error) {
     return response.status(result.statusCode).json({ error: result.error });
   }

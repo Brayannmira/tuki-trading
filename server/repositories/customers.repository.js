@@ -93,7 +93,7 @@ export function verifyCustomerLoginCode({
       ON CONFLICT(email) DO UPDATE SET email_verified_at = excluded.email_verified_at
     `).run(customerId, email, now, now);
     const customer = database.prepare(`
-      SELECT id
+      SELECT id, game_nickname
       FROM customer_accounts
       WHERE email = ?
     `).get(email);
@@ -102,7 +102,7 @@ export function verifyCustomerLoginCode({
       VALUES (?, ?, ?, ?)
     `).run(sessionTokenHash, customer.id, sessionExpiresAt, now);
     database.exec("COMMIT");
-    return { id: customer.id, email };
+    return { id: customer.id, email, gameNickname: customer.game_nickname };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
@@ -111,11 +111,19 @@ export function verifyCustomerLoginCode({
 
 export function selectCustomerBySession(tokenHash, now) {
   return database.prepare(`
-    SELECT customer_accounts.id, customer_accounts.email
+    SELECT customer_accounts.id, customer_accounts.email, customer_accounts.game_nickname
     FROM customer_sessions
     JOIN customer_accounts ON customer_accounts.id = customer_sessions.customer_id
     WHERE customer_sessions.token_hash = ? AND customer_sessions.expires_at > ?
   `).get(tokenHash, now);
+}
+
+export function updateCustomerGameNickname(customerId, gameNickname) {
+  return database.prepare(`
+    UPDATE customer_accounts
+    SET game_nickname = ?
+    WHERE id = ?
+  `).run(gameNickname, customerId).changes;
 }
 
 export function deleteCustomerSession(tokenHash) {

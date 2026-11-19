@@ -23,7 +23,9 @@ function parsePositiveInteger(value) {
 }
 
 export function createOrder(request, response) {
-  const orderData = request.body ?? {};
+  const orderData = request.customer
+    ? { ...(request.body ?? {}), email: request.customer.email }
+    : request.body ?? {};
   const idempotencyKey = request.get("Idempotency-Key");
 
   if (idempotencyKey !== undefined && !isValidIdempotencyKey(idempotencyKey)) {
@@ -79,7 +81,7 @@ export function getOrderStatus(request, response) {
 }
 
 export async function updateOrderStatus(request, response) {
-  const result = saveOrderStatus(request.params.id, request.body?.status);
+  const result = saveOrderStatus(request.params.id, request.body?.status, request.admin.username);
 
   if (result.error) {
     return response.status(result.statusCode).json({ error: result.error });
@@ -110,7 +112,7 @@ export async function retryOrderStatusNotification(request, response) {
 }
 
 export function deleteOrder(request, response) {
-  const result = removeOrder(request.params.id);
+  const result = removeOrder(request.params.id, request.admin.username);
 
   if (result.error) {
     return response.status(result.statusCode).json({ error: result.error });
@@ -126,12 +128,22 @@ export function listAdminAudit(request, response) {
   const limit = request.query.limit === undefined
     ? defaultLimit
     : parsePositiveInteger(request.query.limit);
+  const category = request.query.category ?? "all";
+  const entityId = request.query.entityId;
 
-  if (page === null || limit === null || limit > maxLimit) {
+  if (
+    page === null ||
+    limit === null ||
+    limit > maxLimit ||
+    typeof category !== "string" ||
+    !["all", "orders", "catalog", "admin"].includes(category) ||
+    (entityId !== undefined &&
+      (typeof entityId !== "string" || entityId.length === 0 || entityId.length > 180))
+  ) {
     return response.status(400).json({
-      error: "Usa page y limit como enteros positivos (limit máximo 50).",
+      error: "Usa page y limit como enteros positivos (limit máximo 50), una categoría válida y un entityId de hasta 180 caracteres.",
     });
   }
 
-  return response.json(getAdminAuditLog({ page, limit }));
+  return response.json(getAdminAuditLog({ page, limit, category, entityId }));
 }

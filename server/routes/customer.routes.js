@@ -4,6 +4,7 @@ import {
   listOrders,
   logout,
   requestLoginCode,
+  updateProfile,
   verifyLoginCode,
 } from "../controllers/customer.controller.js";
 import { requireSameOrigin } from "../middleware/adminAuth.js";
@@ -33,4 +34,5 @@ customerRouter.post(
 );
 customerRouter.get("/session", getSession);
 customerRouter.post("/logout", requireSameOrigin, logout);
+customerRouter.patch("/profile", requireCustomer, requireSameOrigin, updateProfile);
 customerRouter.get("/orders", requireCustomer, listOrders);

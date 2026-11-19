@@ -124,6 +124,7 @@ test("customer login verifies email and exposes only matching orders", async () 
   assert.deepEqual(verificationResult, {
     authenticated: true,
     email: "customer@example.com",
+    gameNickname: null,
   });
 
   const setCookie = verification.headers.get("set-cookie");
@@ -131,6 +132,35 @@ test("customer login verifies email and exposes only matching orders", async () 
   assert.match(setCookie, /HttpOnly/i);
   assert.match(setCookie, /SameSite=Strict/i);
   const sessionCookie = setCookie.split(";")[0];
+  const unauthorizedProfileUpdate = await request("/api/customer/profile", {
+    gameNickname: "Player_One",
+  }, { method: "PATCH" });
+  assert.equal(unauthorizedProfileUpdate.status, 401);
+
+  const profileUpdate = await request(
+    "/api/customer/profile",
+    { gameNickname: " Player_One " },
+    { method: "PATCH", cookie: sessionCookie },
+  );
+  assert.equal(profileUpdate.status, 200);
+  assert.deepEqual(await profileUpdate.json(), {
+    email: "customer@example.com",
+    gameNickname: "Player_One",
+  });
+
+  const invalidProfileUpdate = await request(
+    "/api/customer/profile",
+    { gameNickname: " " },
+    { method: "PATCH", cookie: sessionCookie },
+  );
+  assert.equal(invalidProfileUpdate.status, 400);
+  const longProfileUpdate = await request(
+    "/api/customer/profile",
+    { gameNickname: "x".repeat(101) },
+    { method: "PATCH", cookie: sessionCookie },
+  );
+  assert.equal(longProfileUpdate.status, 400);
+
   const sessionResponse = await request("/api/customer/session", null, {
     method: "GET",
     cookie: sessionCookie,
@@ -138,7 +168,26 @@ test("customer login verifies email and exposes only matching orders", async () 
   assert.deepEqual(await sessionResponse.json(), {
     authenticated: true,
     email: "customer@example.com",
+    gameNickname: "Player_One",
   });
+
+  const createdOrderResponse = await request("/api/orders", {
+    realName: "Customer Name",
+    gameNickname: "Player_From_Request",
+    email: "someone-else@example.com",
+    paymentMethod: "Platino",
+    items: [{ name: "New item", category: "Test", quantity: 1 }],
+  }, {
+    cookie: sessionCookie,
+    headers: { "Idempotency-Key": "customer-session-order-key-123" },
+  });
+  const createdOrder = await createdOrderResponse.json();
+  assert.equal(createdOrderResponse.status, 201);
+  assert.equal(
+    database.prepare("SELECT customer_email FROM orders WHERE id = ?")
+      .get(createdOrder.id).customer_email,
+    "customer@example.com",
+  );
 
   const unauthorizedOrders = await fetch(`${baseUrl}/api/customer/orders`);
   assert.equal(unauthorizedOrders.status, 401);
@@ -149,16 +198,18 @@ test("customer login verifies email and exposes only matching orders", async () 
   });
   const ordersResult = await ordersResponse.json();
   assert.equal(ordersResponse.status, 200);
-  assert.equal(ordersResult.pagination.total, 1);
-  assert.equal(ordersResult.data[0].id, "owned-order");
-  assert.deepEqual(ordersResult.data[0].items, [{
+  assert.equal(ordersResult.pagination.total, 2);
+  assert.ok(ordersResult.data.some((order) => order.id === createdOrder.id));
+  const existingOrder = ordersResult.data.find((order) => order.id === "owned-order");
+  assert.ok(existingOrder);
+  assert.deepEqual(existingOrder.items, [{
     name: "Item owned-order",
     category: "Test",
     quantity: 2,
     unitPriceCop: null,
     unitPricePlatinum: null,
   }]);
-  assert.deepEqual(ordersResult.data[0].history.map((entry) => entry.status), ["Pendiente"]);
+  assert.deepEqual(existingOrder.history.map((entry) => entry.status), ["Pendiente"]);
   assert.doesNotMatch(JSON.stringify(ordersResult), /tracking_token|trackingToken|customer_email/i);
 
   const logout = await request("/api/customer/logout", null, {

@@ -6,6 +6,7 @@ import {
   resolveCustomerSession,
   revokeCustomerSession,
   setCustomerSessionCookie,
+  updateCustomerProfile,
   verifyCustomerLoginCode,
 } from "../services/customerAuth.service.js";
 
@@ -48,14 +49,37 @@ export function verifyLoginCode(request, response) {
   }
 
   setCustomerSessionCookie(response, result.token);
-  return response.json({ authenticated: true, email: result.email });
+  return response.json({
+    authenticated: true,
+    email: result.email,
+    gameNickname: result.gameNickname,
+  });
 }
 
 export function getSession(request, response) {
   const customer = resolveCustomerSession(request);
   return response.json(customer
-    ? { authenticated: true, email: customer.email }
+    ? {
+      authenticated: true,
+      email: customer.email,
+      gameNickname: customer.game_nickname,
+    }
     : { authenticated: false });
+}
+
+export function updateProfile(request, response) {
+  const result = updateCustomerProfile(
+    request.customer.id,
+    request.body?.gameNickname,
+  );
+  if (result.error) {
+    return response.status(result.statusCode).json({ error: result.error });
+  }
+
+  return response.json({
+    email: request.customer.email,
+    gameNickname: result.gameNickname,
+  });
 }
 
 export function logout(request, response) {

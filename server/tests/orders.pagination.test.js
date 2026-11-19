@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -43,11 +43,15 @@ const [
     deleteOrder: removeOrderRecord,
   },
   { isValidOrder },
+  { createAdminSessionToken },
+  { beginAdminMfaSetup, completeAdminMfaSetup, createTotpCode },
 ] = await Promise.all([
   import("../app.js"),
   import("../db/database.js"),
   import("../repositories/orders.repository.js"),
   import("../services/orders.service.js"),
+  import("../services/session.service.js"),
+  import("../services/adminMfa.service.js"),
 ]);
 
 const statuses = ["Pendiente", "En proceso", "Completado", "Cancelado"];
@@ -57,13 +61,14 @@ let createdOrder;
 let pricedOrder;
 let sessionCookie;
 let currentAdminPassword = process.env.ADMIN_PASSWORD;
+let recoveryCodes = [];
+let testTotpSecret;
 
 function adminCookie() {
-  const payload = Buffer.from(
-    JSON.stringify({ expiresAt: Date.now() + 60_000, version: 0 }),
-  ).toString("base64url");
-  const signature = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
-  return `tuki_admin_session=${payload}.${signature}`;
+  const admin = database.prepare(`
+    SELECT * FROM admin_users WHERE username = ?
+  `).get(process.env.ADMIN_USERNAME);
+  return `tuki_admin_session=${createAdminSessionToken(admin)}`;
 }
 
 async function requestOrders(query = "", authenticated = true) {
@@ -76,6 +81,18 @@ async function request(path, options = {}) {
 }
 
 before(async () => {
+  const initialAdmin = database.prepare(`
+    SELECT id FROM admin_users WHERE username = ?
+  `).get(process.env.ADMIN_USERNAME);
+  const setup = beginAdminMfaSetup(initialAdmin.id);
+  testTotpSecret = setup.secret;
+  const enrollment = completeAdminMfaSetup(
+    initialAdmin.id,
+    createTotpCode(testTotpSecret, Math.floor(Date.now() / 30_000)),
+  );
+  assert.ok(enrollment.admin);
+  recoveryCodes = enrollment.recoveryCodes;
+
   for (let index = 0; index < 23; index += 1) {
     const id = `pagination-test-${String(index).padStart(2, "0")}`;
     const createdAt = new Date(Date.now() - index * 1000).toISOString();
@@ -108,6 +125,28 @@ after(async () => {
   }
   database.close();
   rmSync(testDirectory, { recursive: true, force: true });
+});
+
+test("adds a request ID to responses and structured access logs", async () => {
+  const entries = [];
+  const originalLog = console.log;
+  console.log = (entry) => entries.push(JSON.parse(entry));
+  try {
+    const response = await request("/api/health");
+    const requestId = response.headers.get("x-request-id");
+    await response.text();
+
+    assert.match(requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    assert.ok(entries.some((entry) =>
+      entry.event === "http.request.completed" &&
+      entry.requestId === requestId &&
+      entry.method === "GET" &&
+      entry.path === "/api/health" &&
+      entry.statusCode === 200
+    ));
+  } finally {
+    console.log = originalLog;
+  }
 });
 
 test("admin orders require an authenticated session", async () => {
@@ -312,7 +351,7 @@ test("admin login issues a session cookie and rejects incorrect credentials", as
   });
   assert.equal(invalidLogin.status, 401);
 
-  const login = await request("/api/admin/login", {
+  const passwordLogin = await request("/api/admin/login", {
     method: "POST",
     headers: { "content-type": "application/json", origin: process.env.APP_ORIGIN },
     body: JSON.stringify({
@@ -320,8 +359,22 @@ test("admin login issues a session cookie and rejects incorrect credentials", as
       password: currentAdminPassword,
     }),
   });
+  assert.equal(passwordLogin.status, 200);
+  assert.deepEqual(await passwordLogin.json(), { twoFactorRequired: true });
+
+  const login = await request("/api/admin/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: process.env.APP_ORIGIN },
+    body: JSON.stringify({
+      username: process.env.ADMIN_USERNAME,
+      password: currentAdminPassword,
+      code: recoveryCodes.shift(),
+    }),
+  });
   assert.equal(login.status, 200);
-  assert.deepEqual(await login.json(), { authenticated: true });
+  const loginResult = await login.json();
+  assert.equal(loginResult.authenticated, true);
+  assert.equal(loginResult.role, "owner");
 
   const setCookie = login.headers.get("set-cookie");
   assert.ok(setCookie);
@@ -331,7 +384,10 @@ test("admin login issues a session cookie and rejects incorrect credentials", as
   const session = await request("/api/admin/session", {
     headers: { cookie: sessionCookie },
   });
-  assert.deepEqual(await session.json(), { authenticated: true });
+  const sessionResult = await session.json();
+  assert.equal(sessionResult.authenticated, true);
+  assert.equal(sessionResult.username, process.env.ADMIN_USERNAME);
+  assert.equal(sessionResult.role, "owner");
 
   const unauthorizedList = await requestOrders("", false);
   assert.equal(unauthorizedList.status, 401);
@@ -356,6 +412,7 @@ test("admin manages catalog prices and an order snapshots totals and status hist
         pricePlatinum: 20,
         stockQuantity: 3,
         availability: "Disponible",
+        expectedVersion: null,
       }),
     },
   );
@@ -501,6 +558,26 @@ test("admin manages catalog prices and an order snapshots totals and status hist
   const restoredProduct = restoredProducts.find((product) => product.id === productId);
   assert.equal(restoredProduct.stockQuantity, 3);
   assert.equal(restoredProduct.popularity, 0);
+  const inventoryAudit = database.prepare(`
+    SELECT actor, details
+    FROM admin_audit_log
+    WHERE action = 'catalog.product_updated' AND entity_id = ?
+  `).all(productId);
+  assert.ok(inventoryAudit.some((entry) => {
+    const details = JSON.parse(entry.details);
+    return entry.actor === process.env.ADMIN_USERNAME &&
+      details.source === "order_completed" &&
+      details.changes.some((change) =>
+        change.field === "stockQuantity" && change.before === 3 && change.after === 1
+      );
+  }));
+  assert.ok(inventoryAudit.some((entry) => {
+    const details = JSON.parse(entry.details);
+    return details.source === "order_reopened" &&
+      details.changes.some((change) =>
+        change.field === "stockQuantity" && change.before === 1 && change.after === 3
+      );
+  }));
 
   const pendingOrder = await request("/api/orders", {
     method: "POST",
@@ -538,6 +615,7 @@ test("admin manages catalog prices and an order snapshots totals and status hist
         pricePlatinum: 20,
         stockQuantity: 1,
         availability: "Disponible",
+        expectedVersion: completedProduct.version,
       }),
     },
   );
@@ -562,6 +640,63 @@ test("admin manages catalog prices and an order snapshots totals and status hist
     .get(productId).stock_quantity, 1);
 });
 
+test("rejects stale admin catalog versions with 409", async () => {
+  const productId = "warframes:Versioned Test";
+  const createProduct = await request(`/api/admin/catalog/${encodeURIComponent(productId)}`, {
+    method: "PATCH",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      id: productId,
+      name: "Versioned Test",
+      category: "Warframes",
+      priceCop: 1000,
+      pricePlatinum: 1,
+      stockQuantity: 4,
+      availability: "Disponible",
+      expectedVersion: null,
+    }),
+  });
+  assert.equal(createProduct.status, 200);
+  const createdProduct = await createProduct.json();
+  assert.equal(createdProduct.version, 1);
+
+  const updateProduct = (priceCop) => request(
+    `/api/admin/catalog/${encodeURIComponent(productId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        cookie: sessionCookie,
+        origin: process.env.APP_ORIGIN,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        id: productId,
+        name: "Versioned Test",
+        category: "Warframes",
+        priceCop,
+        pricePlatinum: 1,
+        stockQuantity: 4,
+        availability: "Disponible",
+        expectedVersion: createdProduct.version,
+      }),
+    },
+  );
+  const responses = await Promise.all([updateProduct(1500), updateProduct(2000)]);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
+
+  const conflict = responses.find((response) => response.status === 409);
+  assert.match((await conflict.json()).error, /Otro administrador actualizó este artículo/);
+  const savedProduct = database.prepare(`
+    SELECT price_cop, version FROM catalog_products WHERE id = ?
+  `).get(productId);
+  assert.equal(savedProduct.version, 2);
+  assert.ok([1500, 2000].includes(savedProduct.price_cop));
+});
+
 test("admin imports catalog prices and rejects invalid import batches", async () => {
   const imported = await request("/api/admin/catalog/import", {
     method: "POST",
@@ -579,6 +714,7 @@ test("admin imports catalog prices and rejects invalid import batches", async ()
         pricePlatinum: null,
         stockQuantity: 2,
         availability: "Disponible",
+        expectedVersion: null,
       }],
     }),
   });
@@ -589,6 +725,72 @@ test("admin imports catalog prices and rejects invalid import batches", async ()
       .get("mele:Imported Item").price_cop,
     5000,
   );
+  const originalUpdatedAt = database.prepare(
+    "SELECT updated_at FROM catalog_products WHERE id = ?",
+  ).get("mele:Imported Item").updated_at;
+  const originalVersion = database.prepare(
+    "SELECT version FROM catalog_products WHERE id = ?",
+  ).get("mele:Imported Item").version;
+  const staleImport = await request("/api/admin/catalog/import", {
+    method: "POST",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      products: [{
+        id: "mele:Imported Item",
+        name: "Imported Item",
+        category: "Armas Melé",
+        priceCop: 6000,
+        pricePlatinum: null,
+        stockQuantity: 2,
+        availability: "Disponible",
+        expectedVersion: null,
+      }],
+    }),
+  });
+  assert.equal(staleImport.status, 409);
+  assert.equal(database.prepare(
+    "SELECT price_cop FROM catalog_products WHERE id = ?",
+  ).get("mele:Imported Item").price_cop, 5000);
+  const originalAuditCount = database.prepare(`
+    SELECT COUNT(*) AS total FROM admin_audit_log
+    WHERE action = 'catalog.product_updated' AND entity_id = ?
+  `).get("mele:Imported Item").total;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const unchangedImport = await request("/api/admin/catalog/import", {
+    method: "POST",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      products: [{
+        id: "mele:Imported Item",
+        name: "Imported Item",
+        category: "Armas Melé",
+        priceCop: 5000,
+        pricePlatinum: null,
+        stockQuantity: 2,
+        availability: "Disponible",
+        expectedVersion: originalVersion,
+      }],
+    }),
+  });
+  assert.equal(unchangedImport.status, 200);
+  assert.equal(database.prepare(
+    "SELECT updated_at FROM catalog_products WHERE id = ?",
+  ).get("mele:Imported Item").updated_at, originalUpdatedAt);
+  assert.equal(database.prepare(
+    "SELECT version FROM catalog_products WHERE id = ?",
+  ).get("mele:Imported Item").version, originalVersion);
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS total FROM admin_audit_log
+    WHERE action = 'catalog.product_updated' AND entity_id = ?
+  `).get("mele:Imported Item").total, originalAuditCount);
 
   const invalid = await request("/api/admin/catalog/import", {
     method: "POST",
@@ -606,6 +808,7 @@ test("admin imports catalog prices and rejects invalid import batches", async ()
         pricePlatinum: null,
         stockQuantity: 0,
         availability: "Desconocido",
+        expectedVersion: null,
       }],
     }),
   });
@@ -615,6 +818,73 @@ test("admin imports catalog prices and rejects invalid import batches", async ()
       .get("mele:Invalid Item").total,
     0,
   );
+});
+
+test("admin catalog import accepts a large atomic batch and rolls it back on database failure", async () => {
+  const products = Array.from({ length: 201 }, (_, index) => ({
+    id: index === 200 ? "atomic-import:fail" : `atomic-import:${index}`,
+    name: `Atomic import ${index} ${"x".repeat(90)}`,
+    category: "Armas Melé",
+    priceCop: 5000,
+    pricePlatinum: null,
+    stockQuantity: 2,
+    availability: "Disponible",
+    expectedVersion: null,
+  }));
+  const body = JSON.stringify({ products });
+  assert.ok(Buffer.byteLength(body) > 25 * 1024);
+
+  database.exec(`
+    CREATE TRIGGER fail_catalog_import_test
+    BEFORE INSERT ON catalog_products
+    WHEN NEW.id = 'atomic-import:fail'
+    BEGIN
+      SELECT RAISE(ABORT, 'catalog import test failure');
+    END
+  `);
+  try {
+    const failedImport = await request("/api/admin/catalog/import", {
+      method: "POST",
+      headers: {
+        cookie: sessionCookie,
+        origin: process.env.APP_ORIGIN,
+        "content-type": "application/json",
+      },
+      body,
+    });
+    assert.equal(failedImport.status, 500);
+  } finally {
+    database.exec("DROP TRIGGER fail_catalog_import_test");
+  }
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS total FROM catalog_products WHERE id LIKE 'atomic-import:%'
+  `).get().total, 0);
+
+  const imported = await request("/api/admin/catalog/import", {
+    method: "POST",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body,
+  });
+  assert.equal(imported.status, 200);
+  assert.equal((await imported.json()).importedCount, products.length);
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS total FROM catalog_products WHERE id LIKE 'atomic-import:%'
+  `).get().total, products.length);
+
+  const oversizedImport = await request("/api/admin/catalog/import", {
+    method: "POST",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ products: [], padding: "x".repeat(1024 * 1024) }),
+  });
+  assert.equal(oversizedImport.status, 413);
 });
 
 test("admin can download a consistent SQLite database backup", async () => {
@@ -644,6 +914,174 @@ test("admin audit route requires a session and lists recorded actions", async ()
     typeof entry.action === "string" &&
     typeof entry.entity_id === "string"
   ));
+  const catalogAudit = await request("/api/admin/audit?limit=50&category=catalog", {
+    headers: { cookie: sessionCookie },
+  });
+  assert.equal(catalogAudit.status, 200);
+  const catalogResult = await catalogAudit.json();
+  assert.ok(catalogResult.data.some((entry) => {
+    if (entry.action !== "catalog.product_updated") return false;
+    const details = JSON.parse(entry.details);
+    return details.changes.some((change) => change.field === "priceCop") &&
+      details.changes.some((change) => change.field === "stockQuantity");
+  }));
+
+  const productAudit = await request(
+    `/api/admin/audit?limit=10&category=catalog&entityId=${encodeURIComponent("mele:Imported Item")}`,
+    { headers: { cookie: sessionCookie } },
+  );
+  assert.equal(productAudit.status, 200);
+  const productAuditResult = await productAudit.json();
+  assert.ok(productAuditResult.data.length > 0);
+  assert.ok(productAuditResult.data.every((entry) => entry.entity_id === "mele:Imported Item"));
+
+  const invalidEntityId = await request(
+    `/api/admin/audit?entityId=${"x".repeat(181)}`,
+    { headers: { cookie: sessionCookie } },
+  );
+  assert.equal(invalidEntityId.status, 400);
+});
+
+test("admin users require TOTP, change their temporary password, and are limited by role", async () => {
+  const initialPassword = "viewer-initial-password";
+  const create = await request("/api/admin/users", {
+    method: "POST",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      username: "audit-viewer",
+      password: initialPassword,
+      role: "viewer",
+    }),
+  });
+  assert.equal(create.status, 201);
+  const createdUser = (await create.json()).user;
+
+  const initialLogin = await request("/api/admin/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: process.env.APP_ORIGIN },
+    body: JSON.stringify({ username: "audit-viewer", password: initialPassword }),
+  });
+  assert.deepEqual(await initialLogin.json(), { mfaSetupRequired: true });
+  const setupCookie = initialLogin.headers.get("set-cookie").split(";")[0];
+  const setupResponse = await request("/api/admin/mfa/setup", {
+    headers: { cookie: setupCookie },
+  });
+  const setup = await setupResponse.json();
+  assert.equal(setupResponse.status, 200);
+  assert.ok(setup.secret);
+  assert.match(setup.otpauthUri, /^otpauth:\/\/totp\//);
+
+  const enroll = await request("/api/admin/mfa/verify", {
+    method: "POST",
+    headers: {
+      cookie: setupCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      code: createTotpCode(setup.secret, Math.floor(Date.now() / 30_000)),
+    }),
+  });
+  assert.equal(enroll.status, 200);
+  const enrollment = await enroll.json();
+  assert.equal(enrollment.mustChangePassword, true);
+  assert.equal(enrollment.recoveryCodes.length, 10);
+  const forcedSessionCookie = enroll.headers.get("set-cookie").split(";")[0];
+
+  const blockedUntilPasswordChanged = await request("/api/admin/orders", {
+    headers: { cookie: forcedSessionCookie },
+  });
+  assert.equal(blockedUntilPasswordChanged.status, 403);
+
+  const passwordChange = await request("/api/admin/password", {
+    method: "POST",
+    headers: {
+      cookie: forcedSessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      currentPassword: initialPassword,
+      newPassword: "viewer-new-secure-password",
+    }),
+  });
+  assert.equal(passwordChange.status, 200);
+
+  const secondFactorChallenge = await request("/api/admin/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: process.env.APP_ORIGIN },
+    body: JSON.stringify({ username: "audit-viewer", password: "viewer-new-secure-password" }),
+  });
+  assert.deepEqual(await secondFactorChallenge.json(), { twoFactorRequired: true });
+  const viewerLogin = await request("/api/admin/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: process.env.APP_ORIGIN },
+    body: JSON.stringify({
+      username: "audit-viewer",
+      password: "viewer-new-secure-password",
+      code: enrollment.recoveryCodes[0],
+    }),
+  });
+  assert.equal(viewerLogin.status, 200);
+  const viewerSessionCookie = viewerLogin.headers.get("set-cookie").split(";")[0];
+
+  const readableOrders = await request("/api/admin/orders", {
+    headers: { cookie: viewerSessionCookie },
+  });
+  assert.equal(readableOrders.status, 200);
+  const readableCatalog = await request("/api/admin/catalog", {
+    headers: { cookie: viewerSessionCookie },
+  });
+  assert.equal(readableCatalog.status, 200);
+  const forbiddenOrderChange = await request("/api/admin/orders/pagination-test-00/status", {
+    method: "PATCH",
+    headers: {
+      cookie: viewerSessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ status: "Cancelado" }),
+  });
+  assert.equal(forbiddenOrderChange.status, 403);
+  const forbiddenCatalogChange = await request("/api/admin/catalog/warframes%3ATest%20Prime", {
+    method: "PATCH",
+    headers: {
+      cookie: viewerSessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({}),
+  });
+  assert.equal(forbiddenCatalogChange.status, 403);
+  const forbiddenUserList = await request("/api/admin/users", {
+    headers: { cookie: viewerSessionCookie },
+  });
+  assert.equal(forbiddenUserList.status, 403);
+
+  const roleChange = await request(`/api/admin/users/${createdUser.id}/role`, {
+    method: "PATCH",
+    headers: {
+      cookie: sessionCookie,
+      origin: process.env.APP_ORIGIN,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ role: "catalog" }),
+  });
+  assert.equal(roleChange.status, 200);
+  const revokedSession = await request("/api/admin/session", {
+    headers: { cookie: viewerSessionCookie },
+  });
+  assert.deepEqual(await revokedSession.json(), { authenticated: false });
+
+  const resetMfa = await request(`/api/admin/users/${createdUser.id}/mfa-reset`, {
+    method: "POST",
+    headers: { cookie: sessionCookie, origin: process.env.APP_ORIGIN },
+  });
+  assert.equal(resetMfa.status, 200);
 });
 
 test("stock is reserved atomically and deleting a completed order restores it", async () => {
@@ -665,6 +1103,7 @@ test("stock is reserved atomically and deleting a completed order restores it", 
         pricePlatinum: 1,
         stockQuantity: 1,
         availability: "Disponible",
+        expectedVersion: null,
       }),
     },
   );
@@ -901,6 +1340,7 @@ test("payment orders use the server snapshot and malformed JSON is rejected", as
         pricePlatinum: null,
         stockQuantity: null,
         availability: "Por confirmar",
+        expectedVersion: null,
       }),
     },
   );
@@ -1031,12 +1471,25 @@ test("changes admin password, persists its hash, and invalidates old sessions", 
   });
   assert.equal(oldPasswordLogin.status, 401);
 
-  const newPasswordLogin = await request("/api/admin/login", {
+  const passwordChallenge = await request("/api/admin/login", {
     method: "POST",
     headers: { "content-type": "application/json", origin: process.env.APP_ORIGIN },
     body: JSON.stringify({ username: process.env.ADMIN_USERNAME, password: newPassword }),
   });
+  assert.equal(passwordChallenge.status, 200);
+  assert.deepEqual(await passwordChallenge.json(), { twoFactorRequired: true });
+
+  const newPasswordLogin = await request("/api/admin/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: process.env.APP_ORIGIN },
+    body: JSON.stringify({
+      username: process.env.ADMIN_USERNAME,
+      password: newPassword,
+      code: recoveryCodes.shift(),
+    }),
+  });
   assert.equal(newPasswordLogin.status, 200);
+  assert.equal((await newPasswordLogin.json()).authenticated, true);
   sessionCookie = newPasswordLogin.headers.get("set-cookie").split(";")[0];
   currentAdminPassword = newPassword;
 });

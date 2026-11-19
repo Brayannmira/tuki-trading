@@ -1,5 +1,11 @@
 import { resolveCustomerSession } from "../services/customerAuth.service.js";
 
+export function attachOptionalCustomer(request, _response, next) {
+  const customer = resolveCustomerSession(request);
+  if (customer) request.customer = customer;
+  next();
+}
+
 export function requireCustomer(request, response, next) {
   const customer = resolveCustomerSession(request);
   if (!customer) {

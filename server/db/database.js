@@ -45,6 +45,7 @@ database.exec(`
     stock_quantity INTEGER CHECK (stock_quantity IS NULL OR stock_quantity >= 0),
     availability TEXT NOT NULL DEFAULT 'Por confirmar'
       CHECK (availability IN ('Disponible', 'En Bóveda', 'Oferta Especial', 'Agotado', 'Por confirmar')),
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
     updated_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS order_status_history (
@@ -72,9 +73,32 @@ database.exec(`
     session_version INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS admin_users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'orders', 'catalog', 'viewer')),
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    mfa_enabled INTEGER NOT NULL DEFAULT 0 CHECK (mfa_enabled IN (0, 1)),
+    totp_secret_encrypted TEXT,
+    last_totp_step INTEGER NOT NULL DEFAULT -1,
+    must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1)),
+    session_version INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS admin_recovery_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id TEXT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS admin_recovery_codes_admin
+    ON admin_recovery_codes (admin_id);
   CREATE TABLE IF NOT EXISTS customer_accounts (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
+    game_nickname TEXT,
     email_verified_at TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
@@ -94,7 +118,19 @@ database.exec(`
   CREATE TABLE IF NOT EXISTS admin_audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor TEXT NOT NULL,
-    action TEXT NOT NULL CHECK (action IN ('order.status_changed', 'order.deleted')),
+    action TEXT NOT NULL CHECK (action IN (
+      'order.status_changed',
+      'order.deleted',
+      'catalog.product_updated',
+      'admin.login',
+      'admin.mfa_enrolled',
+      'admin.mfa_recovery_used',
+      'admin.password_changed',
+      'admin.user_created',
+      'admin.user_role_changed',
+      'admin.user_mfa_reset',
+      'admin.user_deactivated'
+    )),
     entity_id TEXT NOT NULL,
     details TEXT,
     created_at TEXT NOT NULL
@@ -104,6 +140,52 @@ database.exec(`
     CREATE INDEX IF NOT EXISTS order_status_history_order_created
       ON order_status_history (order_id, changed_at);
 `);
+
+const catalogColumns = database.prepare("PRAGMA table_info(catalog_products)").all();
+if (!catalogColumns.some((column) => column.name === "version")) {
+  database.exec(`
+    ALTER TABLE catalog_products
+    ADD COLUMN version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1)
+  `);
+}
+
+const auditTableSchema = database.prepare(`
+  SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'admin_audit_log'
+`).get().sql;
+if (!auditTableSchema.includes("catalog.product_updated")) {
+  database.exec(`
+    BEGIN IMMEDIATE;
+    DROP INDEX IF EXISTS admin_audit_log_entity_created;
+    ALTER TABLE admin_audit_log RENAME TO admin_audit_log_previous;
+    CREATE TABLE admin_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor TEXT NOT NULL,
+      action TEXT NOT NULL CHECK (action IN (
+        'order.status_changed',
+        'order.deleted',
+        'catalog.product_updated',
+        'admin.login',
+        'admin.mfa_enrolled',
+        'admin.mfa_recovery_used',
+        'admin.password_changed',
+        'admin.user_created',
+        'admin.user_role_changed',
+        'admin.user_mfa_reset',
+        'admin.user_deactivated'
+      )),
+      entity_id TEXT NOT NULL,
+      details TEXT,
+      created_at TEXT NOT NULL
+    );
+    INSERT INTO admin_audit_log (id, actor, action, entity_id, details, created_at)
+      SELECT id, actor, action, entity_id, details, created_at
+      FROM admin_audit_log_previous;
+    DROP TABLE admin_audit_log_previous;
+    CREATE INDEX admin_audit_log_entity_created
+      ON admin_audit_log (entity_id, created_at DESC);
+    COMMIT;
+  `);
+}
 
 const orderColumns = database.prepare("PRAGMA table_info(orders)").all();
 if (!orderColumns.some((column) => column.name === "tracking_token_hash")) {
@@ -146,6 +228,10 @@ if (!orderColumns.some((column) => column.name === "tracking_token_hash")) {
     }
   }
   database.exec("CREATE INDEX IF NOT EXISTS order_items_product_id ON order_items (product_id)");
+  const customerAccountColumns = database.prepare("PRAGMA table_info(customer_accounts)").all();
+  if (!customerAccountColumns.some((column) => column.name === "game_nickname")) {
+    database.exec("ALTER TABLE customer_accounts ADD COLUMN game_nickname TEXT");
+  }
   database.exec(`
     CREATE INDEX IF NOT EXISTS order_status_notifications_order_created
       ON order_status_notifications (order_id, created_at DESC)

@@ -220,7 +220,9 @@ export function selectOrderStatusHistory(id) {
 
 export function selectCatalogProduct(id) {
   return database.prepare(`
-    SELECT id, name, category, price_cop, price_platinum, stock_quantity, availability
+    SELECT
+      id, name, category, price_cop, price_platinum, stock_quantity, availability,
+      updated_at, version
     FROM catalog_products
     WHERE id = ?
   `).get(id);
@@ -237,6 +239,7 @@ export function selectCatalogProducts() {
       product.stock_quantity,
       product.availability,
       product.updated_at,
+      product.version,
       COALESCE((
         SELECT SUM(order_item.quantity)
         FROM order_items AS order_item
@@ -249,7 +252,51 @@ export function selectCatalogProducts() {
   `).all();
 }
 
-export function saveCatalogProduct(product) {
+const catalogAuditFields = [
+  ["name", "name"],
+  ["category", "category"],
+  ["priceCop", "price_cop"],
+  ["pricePlatinum", "price_platinum"],
+  ["stockQuantity", "stock_quantity"],
+  ["availability", "availability"],
+];
+
+function selectCatalogAuditSnapshot(id) {
+  const product = database.prepare(`
+    SELECT name, category, price_cop, price_platinum, stock_quantity, availability
+    FROM catalog_products
+    WHERE id = ?
+  `).get(id);
+  if (!product) return null;
+  return Object.fromEntries(
+    catalogAuditFields.map(([field, column]) => [field, product[column]]),
+  );
+}
+
+function writeCatalogAudit(actor, productId, before, after, source, createdAt, orderId) {
+  const changes = catalogAuditFields
+    .filter(([field]) => before?.[field] !== after[field])
+    .map(([field]) => ({ field, before: before?.[field] ?? null, after: after[field] }));
+  if (changes.length === 0) return;
+
+  database.prepare(`
+    INSERT INTO admin_audit_log (actor, action, entity_id, details, created_at)
+    VALUES (?, 'catalog.product_updated', ?, ?, ?)
+  `).run(
+    actor,
+    productId,
+    JSON.stringify({ source, ...(orderId ? { orderId } : {}), changes }),
+    createdAt,
+  );
+}
+
+function saveCatalogProductRecord(product, actor, source) {
+  const before = selectCatalogAuditSnapshot(product.id);
+  const after = Object.fromEntries(
+    catalogAuditFields.map(([field]) => [field, product[field]]),
+  );
+  if (before && catalogAuditFields.every(([field]) => before[field] === after[field])) return;
+
   database.prepare(`
     INSERT INTO catalog_products (
       id, name, category, price_cop, price_platinum, stock_quantity, availability, updated_at
@@ -261,7 +308,8 @@ export function saveCatalogProduct(product) {
       price_platinum = excluded.price_platinum,
       stock_quantity = excluded.stock_quantity,
       availability = excluded.availability,
-      updated_at = excluded.updated_at
+      updated_at = excluded.updated_at,
+      version = catalog_products.version + 1
   `).run(
     product.id,
     product.name,
@@ -272,15 +320,46 @@ export function saveCatalogProduct(product) {
     product.availability,
     product.updatedAt,
   );
+
+  writeCatalogAudit(actor, product.id, before, after, source, product.updatedAt);
 }
 
-export function saveCatalogProducts(products) {
-  database.exec("BEGIN");
+export function saveCatalogProduct(product, actor = "sistema", expectedVersion) {
+  database.exec("BEGIN IMMEDIATE");
   try {
+    if (expectedVersion !== undefined) {
+      const currentVersion = selectCatalogProduct(product.id)?.version ?? null;
+      if (currentVersion !== expectedVersion) {
+        database.exec("ROLLBACK");
+        return { conflict: true };
+      }
+    }
+
+    saveCatalogProductRecord(product, actor, "manual");
+    database.exec("COMMIT");
+    return { conflict: false };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function saveCatalogProducts(products, actor = "sistema") {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const conflictingProduct = products.find((product) => (
+      (selectCatalogProduct(product.id)?.version ?? null) !== product.expectedVersion
+    ));
+    if (conflictingProduct) {
+      database.exec("ROLLBACK");
+      return { conflictProductId: conflictingProduct.id };
+    }
+
     for (const product of products) {
-      saveCatalogProduct(product);
+      saveCatalogProductRecord(product, actor, "import");
     }
     database.exec("COMMIT");
+    return { conflictProductId: null };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
@@ -346,6 +425,7 @@ export function updateOrderStatus(id, status, updatedAt, actor) {
         const product = selectCatalogProduct(item.productId);
         if (product?.stock_quantity === null || product?.stock_quantity === undefined) continue;
 
+        const before = selectCatalogAuditSnapshot(item.productId);
         const nextQuantity = product.stock_quantity +
           (completesOrder ? -item.quantity : item.quantity);
         const nextAvailability = completesOrder && nextQuantity === 0
@@ -358,6 +438,15 @@ export function updateOrderStatus(id, status, updatedAt, actor) {
           SET stock_quantity = ?, availability = ?, updated_at = ?
           WHERE id = ?
         `).run(nextQuantity, nextAvailability, updatedAt, item.productId);
+        writeCatalogAudit(
+          actor,
+          item.productId,
+          before,
+          { ...before, stockQuantity: nextQuantity, availability: nextAvailability },
+          completesOrder ? "order_completed" : "order_reopened",
+          updatedAt,
+          id,
+        );
       }
     }
 
@@ -437,6 +526,7 @@ export function deleteOrder(id, actor) {
       database.exec("COMMIT");
       return 0;
     }
+    const deletedAt = new Date().toISOString();
 
     if (order.status === "Completado") {
       const orderItems = database.prepare(`
@@ -456,6 +546,7 @@ export function deleteOrder(id, actor) {
         const product = selectCatalogProduct(productId);
         if (product?.stock_quantity === null || product?.stock_quantity === undefined) continue;
 
+        const before = selectCatalogAuditSnapshot(productId);
         const nextQuantity = product.stock_quantity + quantity;
         const nextAvailability =
           product.availability === "Agotado" ? "Disponible" : product.availability;
@@ -463,7 +554,16 @@ export function deleteOrder(id, actor) {
           UPDATE catalog_products
           SET stock_quantity = ?, availability = ?, updated_at = ?
           WHERE id = ?
-        `).run(nextQuantity, nextAvailability, new Date().toISOString(), productId);
+        `).run(nextQuantity, nextAvailability, deletedAt, productId);
+        writeCatalogAudit(
+          actor,
+          productId,
+          before,
+          { ...before, stockQuantity: nextQuantity, availability: nextAvailability },
+          "order_deleted",
+          deletedAt,
+          id,
+        );
       }
     }
 
@@ -475,7 +575,7 @@ export function deleteOrder(id, actor) {
       database.prepare(`
         INSERT INTO admin_audit_log (actor, action, entity_id, details, created_at)
         VALUES (?, 'order.deleted', ?, NULL, ?)
-      `).run(actor, id, new Date().toISOString());
+      `).run(actor, id, deletedAt);
     }
 
     database.exec("COMMIT");
@@ -486,15 +586,48 @@ export function deleteOrder(id, actor) {
   }
 }
 
-export function selectAdminAuditLog({ limit = 50, offset = 0 } = {}) {
+function auditFilter(category, entityId) {
+  const prefixByCategory = {
+    orders: "order.",
+    catalog: "catalog.",
+    admin: "admin.",
+  };
+  const prefix = prefixByCategory[category];
+  const clauses = [];
+  const parameters = [];
+  if (prefix) {
+    clauses.push("action LIKE ?");
+    parameters.push(`${prefix}%`);
+  }
+  if (entityId !== undefined) {
+    clauses.push("entity_id = ?");
+    parameters.push(entityId);
+  }
+  return {
+    clause: clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "",
+    parameters,
+  };
+}
+
+export function selectAdminAuditLog({
+  limit = 50,
+  offset = 0,
+  category,
+  entityId,
+} = {}) {
+  const { clause, parameters } = auditFilter(category, entityId);
   return database.prepare(`
     SELECT id, actor, action, entity_id, details, created_at
     FROM admin_audit_log
+    ${clause}
     ORDER BY created_at DESC, id DESC
     LIMIT ? OFFSET ?
-  `).all(limit, offset);
+  `).all(...parameters, limit, offset);
 }
 
-export function countAdminAuditLog() {
-  return database.prepare("SELECT COUNT(*) AS total FROM admin_audit_log").get().total;
+export function countAdminAuditLog(category, entityId) {
+  const { clause, parameters } = auditFilter(category, entityId);
+  return database.prepare(`
+    SELECT COUNT(*) AS total FROM admin_audit_log ${clause}
+  `).get(...parameters).total;
 }

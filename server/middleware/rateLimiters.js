@@ -26,6 +26,22 @@ export const loginRateLimit = rateLimit({
   message: { error: "Demasiados intentos de acceso. Inténtalo de nuevo más tarde." },
 });
 
+export const adminMfaSetupRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: config.isProduction ? 10 : 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Demasiados intentos de segundo factor. Inténtalo más tarde." },
+});
+
+export const adminPasswordChangeRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: config.isProduction ? 5 : 10,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Demasiados intentos de cambio de contraseña. Inténtalo más tarde." },
+});
+
 export const customerCodeRequestRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: config.isProduction ? 5 : 10,

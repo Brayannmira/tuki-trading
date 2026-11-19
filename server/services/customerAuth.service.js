@@ -6,12 +6,14 @@ import {
   randomUUID,
 } from "node:crypto";
 import { config } from "../config/env.js";
+import { serializeError, writeLog } from "../utils/logger.js";
 import {
   deleteCustomerSession,
   removeCustomerLoginCode,
   saveCustomerLoginCode,
   selectCustomerBySession,
   selectCustomerOrders,
+  updateCustomerGameNickname,
   verifyCustomerLoginCode as consumeCustomerLoginCode,
 } from "../repositories/customers.repository.js";
 
@@ -28,6 +30,24 @@ export function isValidCustomerEmail(email) {
   const normalizedEmail = normalizeCustomerEmail(email);
   return normalizedEmail.length <= 254 &&
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail);
+}
+
+export function updateCustomerProfile(customerId, gameNickname) {
+  if (
+    typeof gameNickname !== "string" ||
+    gameNickname.trim().length === 0 ||
+    gameNickname.trim().length > 100
+  ) {
+    return { error: "El nickname debe tener entre 1 y 100 caracteres.", statusCode: 400 };
+  }
+
+  const normalizedNickname = gameNickname.trim();
+  const changes = updateCustomerGameNickname(customerId, normalizedNickname);
+  if (changes === 0) {
+    return { error: "No se encontró el perfil del cliente.", statusCode: 404 };
+  }
+
+  return { gameNickname: normalizedNickname };
 }
 
 function hashLoginCode(email, code) {
@@ -81,9 +101,11 @@ export async function requestCustomerLoginCode(email) {
   try {
     const { sendCustomerLoginCode } = await import("./smtp.service.js");
     await sendCustomerLoginCode({ recipient: normalizedEmail, code });
-  } catch {
+  } catch (error) {
     removeCustomerLoginCode(normalizedEmail, codeHash);
-    console.error("No se pudo enviar un código de acceso al cliente.");
+    writeLog("error", "customer.login_code.delivery_failed", {
+      error: serializeError(error),
+    });
     return {
       error: "No se pudo enviar el código. Inténtalo más tarde.",
       statusCode: 503,
@@ -114,7 +136,11 @@ export function verifyCustomerLoginCode(email, code) {
     return { error: "El código no es válido o venció.", statusCode: 401 };
   }
 
-  return { token, email: customer.email };
+  return {
+    token,
+    email: customer.email,
+    gameNickname: customer.gameNickname,
+  };
 }
 export function resolveCustomerSession(request) {
   const token = getCustomerSessionToken(request);

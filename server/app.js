@@ -9,14 +9,21 @@ import { customerRouter } from "./routes/customer.routes.js";
 import { healthRouter } from "./routes/health.routes.js";
 import { ordersRouter } from "./routes/orders.routes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { requestLogger } from "./middleware/requestLogger.js";
 import { config } from "./config/env.js";
 
 export function createApp() {
   const app = express();
 
+  app.use(requestLogger);
   app.disable("x-powered-by");
   app.use(helmet());
-  app.use(express.json({ limit: "25kb" }));
+  app.use((request, response, next) => {
+    const bodyLimit = request.method === "POST" && request.path === "/api/admin/catalog/import"
+      ? "1mb"
+      : "25kb";
+    express.json({ limit: bodyLimit })(request, response, next);
+  });
   app.use("/api/health", healthRouter);
   app.use("/api/catalog", catalogRouter);
   app.use("/api/orders", ordersRouter);

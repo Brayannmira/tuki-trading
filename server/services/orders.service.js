@@ -7,6 +7,7 @@ import {
   randomUUID,
 } from "node:crypto";
 import { config } from "../config/env.js";
+import { serializeError, writeLog } from "../utils/logger.js";
 import {
   deleteOrder,
   countOrders,
@@ -38,6 +39,7 @@ export const catalogAvailabilityOptions = [
   "Agotado",
   "Por confirmar",
 ];
+const maxCatalogImportProducts = 1000;
 
 function isValidText(value, maxLength) {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= maxLength;
@@ -163,6 +165,13 @@ function isValidPrice(value) {
   );
 }
 
+function hasExpectedCatalogVersion(product) {
+  return product &&
+    Object.prototype.hasOwnProperty.call(product, "expectedVersion") &&
+    (product.expectedVersion === null ||
+      (Number.isSafeInteger(product.expectedVersion) && product.expectedVersion >= 1));
+}
+
 export function isValidCatalogProduct(productId, product) {
   return (
     isValidText(productId, 180) &&
@@ -189,16 +198,23 @@ export function getCatalogProducts() {
     stockQuantity: product.stock_quantity,
     availability: product.availability,
     updatedAt: product.updated_at,
+    version: product.version,
     popularity: product.popularity,
   }));
 }
 
-export function updateCatalogProduct(productId, productData) {
+export function updateCatalogProduct(productId, productData, actor) {
+  if (!hasExpectedCatalogVersion(productData)) {
+    return {
+      error: "Falta una versión válida del artículo para guardar los cambios.",
+      statusCode: 400,
+    };
+  }
   if (!isValidCatalogProduct(productId, productData)) {
     return { error: "Revisa los precios, existencias y disponibilidad del artículo.", statusCode: 400 };
   }
 
-  const product = {
+  const normalizedProduct = {
     id: productId.trim(),
     name: productData.name.trim(),
     category: productData.category.trim(),
@@ -206,21 +222,40 @@ export function updateCatalogProduct(productId, productData) {
     pricePlatinum: productData.pricePlatinum,
     stockQuantity: productData.stockQuantity,
     availability: productData.availability,
-    updatedAt: new Date().toISOString(),
   };
-  saveCatalogProduct(product);
+  const existing = selectCatalogProduct(normalizedProduct.id);
+  const valuesUnchanged = existing &&
+    existing.name === normalizedProduct.name &&
+    existing.category === normalizedProduct.category &&
+    existing.price_cop === normalizedProduct.priceCop &&
+    existing.price_platinum === normalizedProduct.pricePlatinum &&
+    existing.stock_quantity === normalizedProduct.stockQuantity &&
+    existing.availability === normalizedProduct.availability;
+  const product = {
+    ...normalizedProduct,
+    updatedAt: valuesUnchanged ? existing.updated_at : new Date().toISOString(),
+    version: existing ? existing.version + (valuesUnchanged ? 0 : 1) : 1,
+  };
+  const saveResult = saveCatalogProduct(product, actor, productData.expectedVersion);
+  if (saveResult.conflict) {
+    return {
+      error: "Otro administrador actualizó este artículo. Carga la versión actual antes de volver a guardar.",
+      statusCode: 409,
+    };
+  }
   return product;
 }
 
-export function importCatalogProducts(products) {
+export function importCatalogProducts(products, actor) {
   if (
     !Array.isArray(products) ||
     products.length === 0 ||
-    products.length > 100 ||
-    products.some((product) => !product || !isValidCatalogProduct(product.id, product))
+    products.length > maxCatalogImportProducts ||
+    products.some((product) =>
+      !hasExpectedCatalogVersion(product) || !isValidCatalogProduct(product.id, product))
   ) {
     return {
-      error: "El archivo contiene artículos inválidos o excede el límite de 100 por lote.",
+      error: `El archivo contiene artículos inválidos o excede el límite de ${maxCatalogImportProducts} artículos.`,
       statusCode: 400,
     };
   }
@@ -231,7 +266,7 @@ export function importCatalogProducts(products) {
   }
 
   const updatedAt = new Date().toISOString();
-  saveCatalogProducts(products.map((product, index) => ({
+  const saveResult = saveCatalogProducts(products.map((product, index) => ({
     id: productIds[index],
     name: product.name.trim(),
     category: product.category.trim(),
@@ -239,8 +274,15 @@ export function importCatalogProducts(products) {
     pricePlatinum: product.pricePlatinum,
     stockQuantity: product.stockQuantity,
     availability: product.availability,
+    expectedVersion: product.expectedVersion,
     updatedAt,
-  })));
+  })), actor);
+  if (saveResult.conflictProductId) {
+    return {
+      error: `El artículo "${saveResult.conflictProductId}" cambió durante la importación. Actualiza la vista previa y vuelve a intentar.`,
+      statusCode: 409,
+    };
+  }
   return { importedCount: products.length };
 }
 
@@ -404,7 +446,7 @@ export function getOrderStatus(id, trackingToken) {
   };
 }
 
-export function changeOrderStatus(id, status) {
+export function changeOrderStatus(id, status, actor) {
   if (!orderStatuses.includes(status)) {
     return { error: "El estado indicado no es válido.", statusCode: 400 };
   }
@@ -414,7 +456,7 @@ export function changeOrderStatus(id, status) {
     id,
     status,
     updatedAt,
-    config.adminUsername,
+    actor,
   );
   if (stockError) {
     return { error: stockError, statusCode: 409 };
@@ -453,7 +495,12 @@ export async function deliverOrderStatusNotification(notificationId) {
     markOrderStatusNotificationSent(notification.id, new Date().toISOString());
     return { id: notification.id, status: "sent" };
   } catch (error) {
-    console.error("No se pudo enviar la notificación del pedido:", error);
+    writeLog("error", "order.status_notification.delivery_failed", {
+      notificationId: notification.id,
+      orderId: notification.order_id,
+      status: notification.status,
+      error: serializeError(error),
+    });
     markOrderStatusNotificationFailed(
       notification.id,
       "No se pudo enviar el correo. Revisa la configuración y vuelve a intentarlo.",
@@ -466,8 +513,8 @@ export async function deliverOrderStatusNotification(notificationId) {
   }
 }
 
-export function removeOrder(id) {
-  const changes = deleteOrder(id, config.adminUsername);
+export function removeOrder(id, actor) {
+  const changes = deleteOrder(id, actor);
 
   if (changes === 0) {
     return { error: "No se encontró el pedido.", statusCode: 404 };
@@ -476,8 +523,8 @@ export function removeOrder(id) {
   return { id };
 }
 
-export function getAdminAuditLog({ page, limit }) {
-  const total = countAdminAuditLog();
+export function getAdminAuditLog({ page, limit, category = "all", entityId }) {
+  const total = countAdminAuditLog(category, entityId);
   const totalPages = Math.max(Math.ceil(total / limit), 1);
   const currentPage = Math.min(page, totalPages);
 
@@ -485,6 +532,8 @@ export function getAdminAuditLog({ page, limit }) {
     data: selectAdminAuditLog({
       limit,
       offset: (currentPage - 1) * limit,
+      category,
+      entityId,
     }),
     pagination: {
       page: currentPage,
